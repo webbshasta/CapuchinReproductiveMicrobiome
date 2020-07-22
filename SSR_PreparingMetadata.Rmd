@@ -1,0 +1,249 @@
+---
+title: "ModifyingSSRMetaData"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#clear environment
+rm(list = ls())
+```
+
+### Load required packages
+
+```{r}
+library(dplyr); library(stringr); library(fuzzyjoin); library(lubridate)
+```
+
+### Reading in SSR Meta Data
+
+Read in SSR metadata. 
+
+```{r}
+SSRM <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/Metadata/SEW_SSRMetaDataRaw.csv") #this contains all animals
+```
+
+Strip white space from all but the CONTENTS column.
+
+```{r}
+SSRMetaData1 <- SSRM %>%
+                mutate(., INDIVIDUAL = str_trim(INDIVIDUAL)) %>%
+                mutate(., SAMPLE_ID = str_trim(SAMPLE_ID)) %>%
+                mutate(., CONTENTS = str_trim(CONTENTS))
+
+SSRM <- SSRMetaData1 #whitespace has been removed from the INDIVIDUAL and SAMPLE_ID columns
+```
+
+#### Adding rainfall and temperature data
+
+Read in rainfall and temperature data.
+
+```{r}
+SSRRainTemp14_16 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/SupportingDocs/SSR_2014_2016_RainTemp.csv")
+```
+
+Joining rainfall and temperature data to metadata. When left joining, take a moment to check the length of the SSRM df. As a note, due to an equipment malfunction, there is temperature data missing from February 3-8, 2015, May 12-June8, 2015, and March 25-27, 2016. In the left_join below, these entries will be filled with NAs.
+
+```{r}
+length(SSRM$SAMPLE_ID) #517 rows
+
+SSRMetaData2 <- SSRM %>%
+               left_join(., SSRRainTemp14_16, by = c("DATE" = "DateTime")) #; length(SSRMetaData2$SAMPLE_ID); View(SSRMetaData2) #also 517 rows
+
+SSRM <- SSRMetaData2 #saving the rain/temp additions into the main DF
+```
+
+#### Adding dietary variables
+
+Currently in SSRM, there is a CONTENTS column with a string of 4-letter codes that correspond to fruit species, as well as INSE, CATA, and PITH which are broader codes for insects, caterpillars, and pith, respectively. Here, we will create a few diet-related columns.
+
+```{r}
+fruitCodes <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/SupportingDocs/fruitCodes.csv")
+fruits<- as.character(fruitCodes$TaxonCodes) #making a list of the 4-letter codes from the parser
+nonFruits <- c("INVE", "PITH", "DAMEFL") #making a list of the non-fruit codes
+
+SSRMetaData3 <- SSRM %>%
+                mutate(insectsPresent = str_detect(CONTENTS, "INVE")) %>% #created a binary variable for presence/absence of non-caterpillar invertebrates
+                mutate(pithPresent = str_detect(CONTENTS, "PITH")) %>% #created a binary variable for presence/absence of pith
+                mutate(fruitPresent = str_detect(CONTENTS, paste(fruits, collapse = "|"))) %>% #created a binary variable for presence/absence of fruits
+                mutate(flowerPresent = str_detect(CONTENTS, "DAMEFL")) %>% #created a binary variable for presence/absence of flowers
+                mutate(caterPresent = str_detect(CONTENTS, "CATA")) %>% #created a binary variable for presence/absence of caterpillars
+                mutate(dietType = case_when(fruitPresent == "TRUE" & insectsPresent == "TRUE" ~ "Insect_Fruit", # create general dietary variables 
+                                            fruitPresent == "FALSE" & insectsPresent == "TRUE" & caterPresent == "FALSE" ~ "Insect",
+                                            fruitPresent == "TRUE" & insectsPresent == "FALSE" & caterPresent == "FALSE" ~ "Fruit",
+                                            fruitPresent == "FALSE" & insectsPresent == "FALSE" & caterPresent == "TRUE" ~ "Caterpillar",
+                                            fruitPresent == "FALSE" & insectsPresent == "FALSE" & caterPresent == "FALSE" & pithPresent == "TRUE" ~ "Pith",
+                                            fruitPresent == "TRUE" & insectsPresent == "FALSE" & caterPresent == "TRUE" ~ "Fruit_Caterpillar",
+                                            fruitPresent == "FALSE" & insectsPresent == "FALSE" & caterPresent == "FALSE" & pithPresent == "FALSE" & flowerPresent == "FALSE" ~ "unknown",
+                                            fruitPresent == "FALSE" & insectsPresent == "TRUE" & caterPresent == "TRUE" ~ "Insect_Caterpillar"))
+SSRM <- SSRMetaData3 #saving new variables in SSRM
+
+SSRMetaData4 <- SSRM %>%
+                mutate(dietType = replace(dietType, SampleOrControl == "Control", NA)) %>% #changing dietType of controls to NA
+                mutate(IND_CODE = replace(IND_CODE, IND_CODE == "La", "LA")) %>% #fixing a weird capitalization error
+                mutate(INDIVIDUAL = replace(INDIVIDUAL, INDIVIDUAL == "legolas", "Legolas")) #fixing capitalization
+
+SSRM <- SSRMetaData4 #saving new changes in SSRM
+```
+
+Adding column for colour vision phenotype
+
+```{r}
+SSRColourVision <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/SupportingDocs/2016ColorVision.csv")
+
+SSRMetaData5 <- SSRM %>%
+               left_join(., SSRColourVision, by = "INDIVIDUAL") #%>% #adding colour vision phenotype to individuals
+               #select(., -c(X.y, X.1, X.2, X.3, X.4, X.5, X.6, X.7, X.8, X.9))
+
+SSRM <- SSRMetaData5
+
+SSRM <- SSRM %>%
+        mutate(DATE = as.Date(DATE))
+```
+
+### Adding reproductive status to SSRM
+
+For the purposes of the pregnancy microbiome project, we will only be analysing females. Here, we will join reproductive status to metadata.
+
+```{r}
+repStatusTable <- read.csv("~/Desktop/PregnancyPaper2019/BehaviouralAnalysis/EcologicalDataCensus/RepStatusSSRFemalesClean.csv")
+
+repStatusTable <- repStatusTable %>%
+                  mutate(StartDate = as.Date(StartDate)) %>% #make sure the dates are NOT factors
+                  mutate(EndDate = as.Date(EndDate))
+
+SSRMetaData6 <- SSRM %>%
+                  fuzzy_left_join(., repStatusTable, 
+                            by = c("INDIVIDUAL" = "Animal", "DATE" = "StartDate", "DATE" = "EndDate"), 
+                            match_fun = list(`==`, `>=`, `<=`)); View(SSRMetaData6) #adding rep status for all animals; males and females who are not in rep table will have NAs
+
+#SSRMetaData7 <- SSRMetaData6 %>%
+                #mutate(ReproductiveStatus = replace(ReproductiveStatus, is.na(ReproductiveStatus) & SEX == "Female", "Unknown")) #replacing the NA females with unknown
+
+SSRMetaData8 <- SSRMetaData6 %>%
+                dplyr::select(-Animal, -AnimalCode, -X.x, -X.y, -X.1)
+
+SSRM <- SSRMetaData8
+
+write.csv(SSRM,"~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/SEW_SSRMetaData_Clean22April.csv")
+
+SSRM <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/SEW_SSRMetaData_Clean22April.csv")
+```
+
+### Adding binomial variables for ReproductiveStatus
+
+Rename the ReproductiveStatus column (to match the microbiome code). Making additional columns in metadata to make rep status binomial.
+
+In this case, we have categorized Unverified Pregnancies as Pregnant. The commented out code below can be used in cases when UnverifiedPregnancies are treated as UnverifiedPregnancies.
+
+```{r}
+
+SSRM <- rename(SSRM, REP_STATE = ReproductiveStatus) %>% #renaming ReproductiveStatus to REP_STATE
+        dplyr::select(-COLLECTOR, -CONSISTENCY, -TemperatureMin, -TIME) #removing these for now
+
+SSRMMetaData9 <- SSRM %>%
+                 mutate(Preg.NotPreg = case_when(REP_STATE == "Pregnant" ~ "Pregnant", 
+                                                 REP_STATE == "Nursing" ~ "NotPregnant",
+                                                 REP_STATE == "Cycling" ~ "NotPregnant")) %>%
+                mutate(Nurse.NotNurse = case_when(REP_STATE == "Pregnant" ~ "NotNursing", 
+                                                 REP_STATE == "Nursing" ~ "Nursing",
+                                                 REP_STATE == "Cycling" ~ "NotNursing")) %>%
+                mutate(Cyc.NotCyc = case_when(REP_STATE == "Pregnant" ~ "NotCycling", 
+                                                 REP_STATE == "Nursing" ~ "NotCycling",
+                                                 REP_STATE == "Cycling" ~ "Cycling")) ; View(SSRMMetaData9)
+
+SSRM <- SSRMMetaData9
+```
+
+Filtering unknown reproductive status.
+
+```{r}
+
+SSRMMetaData10 <- SSRM %>%
+                  filter(., is.na(REP_STATE) | REP_STATE != "Unknown") %>% #filter will automatically remove NAs so you need to specify that you want them to stay
+                  filter(., INDIVIDUAL != "Baloo"); View(SSRMMetaData10) #taking baloo out of the metadata as she had incomplete sequencing
+
+SSRM <- SSRMMetaData10
+```
+
+```{r}
+write.csv(SSRM,"~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/Metadata/SSRMetaData16SPregnancy_22April.csv")
+```
+
+We decided to run the microbiome analysis on the stages of cycling and pregnancy and lactation. I'm going to read in the prepped meta data, and do an additional join to get the cycling stages in there. 
+
+To prepare the stages of cycling, pregnancy, and lactation:
+
+```{r}
+stageDF <- read.csv("~/Desktop/PregnancyPaper2019/BehaviouralAnalysis/EcologicalDataCensus/RepStatusSSRFemalesCleanCYCLIng_STAGE.csv")
+
+#stageDF <- stageDF %>%
+#           filter(., ReproductiveStatus == "Pregnant" | ReproductiveStatus == "Nursing")
+
+```
+
+To add nursing and pregnancy stages to the metadata, we will bring in the full metadata set, and filter for only the categories we are going to analyse. Gestation is considered 157 days in this dataset, as per Carnegie et al. 2011. Nursing is considered 365 days.
+
+Pregnancy Stage 1: 0-53
+Pregnancy Stage 2: 54-104
+Pregnancy Stage 3: 105-158
+
+Nursing Stage 1: 0-121
+Nursing Stage 2: 122-242
+Nursing Stage 3: 243-365
+
+```{r}
+stageMetaData <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/Metadata/SSRMetaData16SPregnancy_22April.csv")
+View(stageMetaData) #512 rows
+stageMetaData <- stageMetaData %>%
+                 filter(., REP_STATE =="Pregnant" | REP_STATE == "Nursing" | SampleOrControl == "Control") #Keep all samples where females were preg or nursing, keep controls
+
+stageMetaData$DATE = as.Date(stageMetaData$DATE)
+stageMetaData$StartDate = as.Date(stageMetaData$StartDate)
+stageMetaData$EndDate = as.Date(stageMetaData$EndDate)
+
+stageMetaData2 <- stageMetaData %>%
+                  mutate(RepStateStage = case_when(REP_STATE == "Nursing" & DATE >= StartDate & DATE <= StartDate + days(121) ~ "NursingStage1",
+                                                   REP_STATE == "Nursing" & DATE >= StartDate + days(122) & DATE <= StartDate + days(242) ~ "NursingStage2",
+                                                   REP_STATE == "Nursing" & DATE >= StartDate + days(243) & DATE <= EndDate ~ "NursingStage3",
+                                                   REP_STATE == "Pregnant" & DATE >= StartDate & DATE <= StartDate + days(53) ~ "PregnancyStage1",
+                                                   REP_STATE == "Pregnant" & DATE >= StartDate + days(54) & DATE <= StartDate + days(104) ~ "PregnancyStage2",
+                                                   REP_STATE == "Pregnant" & DATE >= StartDate + days(105) & DATE <= EndDate ~ "PregnancyStage3"))
+stageMetaData2 <- stageMetaData2 %>%
+                  select(-X, -X.1)
+
+write.csv(stageMetaData2, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/Metadata/repStateStageMetaData22April.csv")
+
+```
+
+### Summaries of the data
+
+Creating a figure for rep status 
+
+```{r}
+repStatusDF <- read.csv("~/Desktop/PregnancyPaper2019/BehaviouralAnalysis/EcologicalDataCensus/RepStatusSSRFemalesClean.csv")
+
+repStatusDF <- repStatusDF %>%
+               filter(., ReproductiveStatus == "Cycling" | ReproductiveStatus == "Nursing" | ReproductiveStatus == "Pregnant")
+
+repStatusDF$StartDate <- as.Date(repStatusDF$StartDate)
+repStatusDF$EndDate <- as.Date(repStatusDF$EndDate)
+
+q <- ggplot(repStatusDF, aes(color = ReproductiveStatus)) +
+      geom_segment(aes(x=StartDate, xend=EndDate, y=Animal, yend=Animal), size=3); q
+
+
+```
+
+
+```{r}
+metadataStageFilt <- metadataStageFilt %>%
+                     mutate(MonthOfYear = format(as.Date(DATE,format="%Y-%m-%d"),"%Y-%m"))
+
+psStageSummary <- ggplot(metadataStageFilt, aes(INDIVIDUAL, MonthOfYear, fill = RepStateStage)) +
+                    geom_bar()
+```
+

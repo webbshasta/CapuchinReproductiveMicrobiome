@@ -1,0 +1,1769 @@
+---
+title: "16S_Pregnancy_RawReadsToAnalysis"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list = ls())
+```
+
+### Download raw reads from Illumina Base Space {web browser}
+
+https://basespace.illumina.com/
+
+  1. Navigate to the projects tab, and click Download Project.
+  2. In our case, we ran the same set of 500 samples (including true samples and controls) twice. Raw sequences were downloaded into `/Users/shasta.webb/Desktop/PregnancyPaper2019` for Run 1 and Run 2.
+  
+### Move files from subdirectories into main directory {command line}
+
+  1. I renamed the Run 1 directory `SSR_16S_Run1` and the Run 2 directory `SSR_16S_Run2`.
+  2. Use this command on the command line to move all fastq files from all subdirectories into the main Run1 or Run2 directory.
+  
+```{unix}
+find . -mindepth 2 -type f -print -exec mv {} . \; #using the find commmand, we can dig into all subdirectories, 
+                                                   #gather files, and place them the current directory 
+```
+
+  3. Remove the empty directories in the `SSR_16S_Run1` and `SSR_16S_Run2` directories.
+  
+```{unix}
+ls -d */ #this will list only directories in your current directory
+rm -r FASTQ_Generation_2018-11-21_17_25_24Z-138728638/ #removes the empty directory and any remaining contents (should only be other empty directories)
+ls | wc -l #this will output how many files are now in the your directory; for this dataset, it should be 1000
+```
+  
+### Merge contents of Run1 and Run2 files {python}
+
+Because we duplicated the MiSeq 2x250 run, we have 2 fastq files for each forward read and each reverse read for 500 samples for a total of 2000 files. We need to concatenate the raw reads for each sample, keeping the forward reads and raw reads separate.
+
+Before the python script I wrote can concatenate the files, we need to unzip them. 
+
+```{unix}
+gunzip *.fastq.gz #run this for the files in the Run1 and Run2 directories
+```
+
+The python script below will concatenate all unzipped fastq files with the same name and save them as a new file (with the same name) in the directory where you run the script.
+
+```{python3}
+#!/usr/bin/env python3
+
+#Concatenate files 
+
+import os
+
+#This script takes all files from 2 directories and concatenates them under the same file name
+#Files must be unzipped before this script will run
+
+file_paths = {} #initiating an empty dictionary: file names will be the keys and file paths will be the values
+
+for root, dirs, files in os.walk(".", topdown=False): #"." means to start in the current directory
+    for f in files:                                   #from which the scropt is being run
+        if f.endswith(".fastq"):                      #pick the file extension you want here
+            if f not in file_paths:                   #if the file name is not a key, make it one
+                file_paths[f] = []                    #value of this key is an empty list
+            file_paths[f].append(root)                #changing value to the path to the file
+
+for k, v in file_paths.items():                       #iterating through file names and paths
+    print('{} : {}'.format(k,v))                      #file names are keys, paths to that file name are values
+                                                      #print('{} is the path and {} is the fastq file.'.format(k, v))            
+
+for f, paths in file_paths.items():                   #for each file and file associated file paths
+    rawReads = []                                     #initiate empty list  
+    for p in paths:                                   #for each path in the path tuples
+        with open(os.path.join(p,f)) as f2:           #with the path and file names joined opened as file 2 
+            rawReads.append(f2.read())                #append the contents of that file to the empty list
+        with open(f, 'w') as f3:                      #with the original file opened for writing as file 3
+            f3.write(''.join(rawReads))               #write the f3 file with the joined contents of the txt list
+```
+
+Check to see if the concatenation worked.
+
+```{unix}
+~/Desktop/PregnancyPaper2019/rawFastqFiles$ du -sk substr476s_S480_L001_R1_001.fastq #du -sk displays the size in KB of a given file
+                                                                                     #17092	substr476s_S480_L001_R1_001.fastq <- from the concatenated raw reads
+
+~/Desktop/PregnancyPaper2019/rawFastqFiles/SSR_16S_Run1$ du -sk substr476s_S480_L001_R1_001.fastq 
+                                                                                     #8208	substr476s_S480_L001_R1_001.fastq
+
+~/Desktop/PregnancyPaper2019/rawFastqFiles/SSR_16S_Run2$ du -sk substr476s_S480_L001_R1_001.fastq 
+                                                                                     #8884	substr476s_S480_L001_R1_001.fastq
+```
+
+### G-zip files
+
+```{unix}
+$ gzip *.fastq
+```
+
+### Inspect raw data using `seqkit` {command line}
+
+Once the Run1 and Run2 fastq files have successfully been concatenated and re-zipped, it's time to inspect the raw reads. To install `seqkit`, first ensure that ANACONDA is installed by typing into the command line `which conda`. If no file path is provided, install ANACONDA.
+
+Once ANACONDA is installed, you can install `seqkit`. The `seqkit` package is useful for looking at basic stats.
+
+```{unix}
+$ conda install -c bioconda seqkit
+```
+
+Run `seqkit stats` to look at basic stats. Note: Subset the the files you intend to inspect to save time. 
+
+```{unix}
+$ seqkit stats *.fastq.gz #You can subset using wildcards (e.g. seqkit stats *Winky*.fastq.gz)
+```
+
+### Using `cutadapt` to remove barcodes and indices {command line}
+
+From the MiSeq, we expect to get demultiplexed data. However, remnants of Illumina barcodes, seqeuncing primers, indices, and adapters can remain. We need to run `cutadapt` on all files to ensure removal of these artifacts. At this stage we are *not* removing the 16S amplification primers (that will come later).
+
+To install `cutadapt`, first ensure that ANACONDA is installed by typing into the command line `which conda`. If no file path is provided, install ANACONDA. Once ANACONDA is installed, you can install `cutadapt`.
+
+`conda install -c bioconda cutadapt`
+
+Now that `cutadapt` is installed, we can trim barcodes from our raw reads. 
+
+  1. Navigate to the directory above where the raw reads are.
+  2. Create a directory called `NoBarcode`.
+  
+```{unix}
+$ mkdir NoBarcode
+```
+  
+  3. Move back into the raw reads directory.
+  4. Locate your sequencing primer, barcode, and Illumina index information, which should be available from the institution that prepared your libraries. In our case, we had 500 unique barcodes. In `cutadapt`, "N" will be interpreted as a wildcard, so the command below will remove remnant sequencing primers.
+  5. Run the following code to trim all R1 (forward) reads:
+
+```{unix}
+for file in *R1_001.fastq.gz; do cutadapt -a CTGTCTCTTATACACATCTCCGAGCCCACGAGACNNNNNNNNATCTCGTATGCCGTCTTCTGCTTG -a CAAGCAGAAGACGGCATACGAGATNNNNNNNNGTCTCGTGGGCTCGGAGATGTGTATAAGAGACAG -j 0 -o ../NoBarcode/$file.fastq $file; done
+```
+
+Note: The sequence of the adapter is given with the `-a` option. If no output file is specified via the `-o` option, then the output is sent to the standard output stream. To automatically detect the number of available cores, use `-j 0` (or `--cores=0`). 
+
+  6. Run the following code for reverse reads:
+
+```{unix}
+for file in *R2_001.fastq.gz; do cutadapt -a CTGTCTCTTATACACATCTGACGCTGCCGACGANNNNNNNNGTGTAGATCTCGGTGGTCGCCGTATCATT -a AATGATACGGCGACCACCGAGATCTACACNNNNNNNNTCGTCGGCAGCGTCAGATGTGTATAAGAGACAG -j 0 -o ../NoBarcode/$file.fastq $file; done
+```
+
+The trimmed files should appear in the `NoBarcode` directory. Use `seqkit stats` again to see if basic sequence stats have changed.
+
+*Summary: So far we have downloaded the raw files and used `cutadapt` to remove sequencing primers, barcodes, and indices.*
+
+### Package installation and loading {R}
+
+Before beginning anything in R, ensure that the following are installed and loaded:
+
+-Bioconductor
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install()
+library(BiocManager)
+```
+
+-Biostrings
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("Biostrings")
+library(Biostrings)
+```
+
+-dada2
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("dada2") #version = "3.9")
+library(dada2)
+```
+
+-phyloseq
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("phyloseq")
+library(phyloseq)
+```
+
+-vegan
+
+```{r}
+install.packages("vegan")
+library(vegan)
+```
+
+-DESeq2
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("DESeq2")
+#library(DESeq2)
+```
+
+-ggplot2
+
+```{r}
+install.packages("ggplot2")
+library(ggplot2)
+```
+
+-grid
+
+```{r}
+library(grid)
+```
+
+-gridExtra
+
+```{r}
+install.packages("gridExtra")
+library(gridExtra)
+```
+
+-phangorn
+
+```{r}
+install.packages("phangorn")
+library(phangorn)
+```
+
+-DECIPHER
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("DECIPHER")
+library(DECIPHER)
+```
+-decontam
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("decontam")
+library(decontam)
+```
+
+### Loading packages
+
+```{r}
+library(Biostrings)
+library(dada2)
+library(phyloseq)
+library(vegan)
+library(DESeq2)
+library(ggplot2)
+library(gridExtra)
+library(phangorn)
+library(ShortRead)
+#library(DECIPHER)
+```
+
+### Preparing data
+
+The files with barcodes removed should now be in the `NoBarcode` directory. First, we read in the names of the fastq files, and perform some string manipulation. `sort` ensures forward/reverse files are in same order, then we extract sample names from our forward list.
+
+```{r path}
+# CHANGE ME to the directory containing the fastq files after unzipping.
+setwd("/Users/shasta.webb/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/")
+path <- "/Users/shasta.webb/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/NoBarcode"
+length(list.files(path)) #1000 files, minus the 4 we removed for duplication at a later step
+```
+
+*Here the string manipulation has to be tailored to each different run.*
+
+```{r names}
+fnFs <- sort(list.files(path, pattern="_R1_")) # forward files
+length(fnFs) #500 forward read files, will be 498 after duplicates are removed
+
+fnRs <- sort(list.files(path, pattern="_R2_")) # reverse files
+length(fnRs) #500 reverse read files, will be 498 after duplicates are removed
+
+sample.names <- sapply(strsplit(fnFs, "_"), `[`, 1)
+sample.names
+fnFs <- file.path(path, fnFs)
+fnRs <- file.path(path, fnRs)
+
+#These primers were taken from the UMGC document. These are the locus specific primers.
+
+FWD <- "GTGYCAGCMGCCGCGGTA" #forward primer sequence (locus specific primer, NOT indexing primer) 
+REV <-  "GGACTACHVGGGTWTCTAAT" #reverse primer sequence (locus specific primer, NOT indexing primer)
+```
+
+Make a `filtered` subdirectory in `NoBarcodes/`. 
+
+```{r}
+filt_path <- file.path(path, "filtered") 
+filtFs <- file.path(filt_path, paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(filt_path, paste0(sample.names, "_R_filt.fastq.gz"))
+length(filtFs) #This should match the number of forward read files you have in the NoBarcode directory. 
+length(filtRs) #This should match the number of forward read files you have in the NoBarcode directory. 
+```
+
+Here you can check for duplicates before trimming and filtering. (This is the step where I initially found the duplicated 122M.)
+
+```{r}
+any(duplicated(c(fnFs, fnRs)))
+duplicated(c(filtFs, filtRs))
+```
+
+I found duplicates of 122M. Remove any duplicates at the command line. We do not know if these samples are from the same monkey, so we have to remove them from the data set. *Once you run the chunk below, it is important to run the R chunks above again to ensure the variables reflect the change!*
+
+```{unix}
+$ rm JA15145-122M* #remove all files with this pattern in the name
+$ ls | grep "JA15145-122M" #check to see if files were removed
+```
+
+### Removing locus-specific primers
+
+Next we will be removing primers from all reads. First we need to create a function to get all orientations of the primers. 
+
+```{r}
+allOrients <- function(primer) {  # Create all orientations of the input sequence
+    require(Biostrings)
+    dna <- DNAString(primer)      # The Biostrings works w/ DNAString objects rather than character vectors
+    orients <- c(Forward = dna, Complement = Biostrings::complement(dna), Reverse = reverse(dna), 
+        RevComp = reverseComplement(dna))
+    return(sapply(orients, toString))  # Convert back to character vector
+}
+
+FWD.orients <- allOrients(FWD)
+REV.orients <- allOrients(REV)
+FWD.orients
+REV.orients
+```
+
+Before trimming primers or removing low quality reads, we need to remove ambiguous base calls. I removed sample 126M from the dataset and from the metadata. That sample had 2x as many forward reads as reverse reads. 
+
+```{r}
+filterAndTrim(fnFs, filtFs, fnRs, filtRs, maxN = 0, multithread = TRUE) #Here we are giving the filterAndTrim function the files from NoBarcodes, removing reads with ambiguous base calls, and putting the filtered files in the filtered/ directory. 
+```
+
+Building a primer hits function. 
+
+```{r}
+primerHits <- function(primer, fn) {        # Counts number of reads in which the primer is found
+    nhits <- vcountPattern(primer, sread(readFastq(fn)), fixed = FALSE)
+    return(sum(nhits > 0))
+}
+
+rbind(FWD.ForwardReads = sapply(FWD.orients, primerHits, fn = filtFs[[1]]), 
+    FWD.ReverseReads = sapply(FWD.orients, primerHits, fn = filtRs[[1]]), 
+    REV.ForwardReads = sapply(REV.orients, primerHits, fn = filtFs[[1]]), 
+    REV.ReverseReads = sapply(REV.orients, primerHits, fn = filtRs[[1]]))
+```
+
+The above function detects primers in the reads. In the next step, we will use `cutadapt` again to remove them. 
+
+### Removing primers with `cutadapt`
+
+```{r}
+cutadapt <- "//anaconda3/bin/cutadapt" # CHANGE ME to the cutadapt path on your machine
+system2(cutadapt, args = "--version") # Run shell commands from R
+
+path.cut <- ("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/NoBarcode/filtered")
+if(!dir.exists(path.cut)) dir.create(path.cut)
+fnFs.cut <- file.path(path.cut, basename(sub('\\.fastq.gz.fastq', '.NoPrimer.fq.gz', fnFs)))
+fnRs.cut <- file.path(path.cut, basename(sub('\\.fastq.gz.fastq', '.NoPrimer.fq.gz', fnRs)))
+
+FWD.RC <- dada2:::rc(FWD)
+REV.RC <- dada2:::rc(REV)
+
+R1.flags <- paste("-g", FWD, "-a", REV.RC) # Trim FWD and the reverse-complement of REV off of R1 (forward reads)
+R2.flags <- paste("-G", REV, "-A", FWD.RC) # Trim REV and the reverse-complement of FWD off of R2 (reverse reads)
+
+for(i in seq_along(fnFs)) { # Run Cutadapt
+  system2(cutadapt, args = c(R1.flags, R2.flags, "-n", 2, # -n 2 required to remove FWD and REV from reads
+                             "-m", 1,
+                             #"-e", 0,
+                             #"-O", 17,
+                             "-o", fnFs.cut[i], "-p", fnRs.cut[i], # output files
+                             filtFs[i], filtRs[i])) # input files
+}
+
+# Check to see if any primers remain
+
+rbind(FWD.ForwardReads = sapply(FWD.orients, primerHits, fn = fnFs.cut[[1]]), 
+    FWD.ReverseReads = sapply(FWD.orients, primerHits, fn = fnRs.cut[[1]]), 
+    REV.ForwardReads = sapply(REV.orients, primerHits, fn = fnFs.cut[[1]]), 
+    REV.ReverseReads = sapply(REV.orients, primerHits, fn = fnRs.cut[[1]]))
+
+```
+
+Since no primers were found in any of the reads, we can proceed. 
+
+### Inspect quality profiles
+
+The median quality score at each position is shown by the green line, and the quartiles of the quality score distribution by the orange lines. The red line shows the scaled proportion of reads that extend to at least that position (this is more useful for other sequencing technologies, as Illumina reads are typically all the same length, hence the flat red line).
+
+```{r quality forward reads}
+ plotQualityProfile(fnFs.cut[1:2]) #inspecting quality of the forward reads
+```
+
+The forward reads are good quality. We generally advise trimming the last few nucleotides to avoid less well-controlled errors that can arise there. These quality profiles do not suggest that any additional trimming is needed.
+
+```{r quality R reads}
+plotQualityProfile(fnRs.cut[1:2]) #inspecting quality of the reverse reads, which is expected to be worse
+```
+
+### Filter and trim
+
+Because of their good quality, we will truncate the forward reads at position 230 (trimming the last 20 nucleotides).
+
+The reverse reads are of significantly worse quality, especially at the end, which is common in Illumina sequencing. This isn’t too worrisome, as DADA2 incorporates quality information into its error model which makes the algorithm robust to lower quality sequence, but trimming as the average qualities crash will improve the algorithm’s sensitivity to rare sequence variants. Based on these profiles, we will truncate the reverse reads at position 200.
+
+*Considerations for your own data* Your reads must still overlap after truncation in order to merge them later! Your `truncLen` must be large enough to maintain 20 + nucleotides of overlap between them.
+
+### Filter the reads 
+
+This step usually takes the longest and the most part of your CPU power. Note: In this case we are overwriting the filt files (those that previously only had Ns filtered out. This might be bad practice...)
+
+```{r filter}
+help("filterAndTrim") #For more info on filterAndTrim, which is a function within DADA2
+out <- filterAndTrim(fnFs.cut, filtFs, fnRs.cut, filtRs, truncLen=c(230,210), maxN=0, maxEE=c(2,5), truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=TRUE)
+head(out) #on the first round, almost 50% of reads were being cut. I will relax maxEE from c(1,1) to c(2,5) and see what happens
+saveRDS(out, "turncatedFilteredReads.csv")
+```
+
+```{r quality reverse reads}
+plotQualityProfile(filtRs[1:2]) #inspecting filtered reverse reads
+```
+
+The maxEE parameter sets the maximum number of “expected errors” allowed in a read, which is a better filter than simply averaging quality scores. The filtering parameters are starting points, not set in stone. If you want to speed up downstream computation, consider tightening maxEE. If too few reads are passing the filter, consider relaxing maxEE, perhaps especially on the reverse reads (eg. maxEE=c(2,5)), and reducing the truncLen to remove low quality tails. Remember though, when choosing truncLen for paired-end reads you must maintain overlap after truncation in order to merge them later.
+
+### Learn the error rates
+
+The DADA2 algorithm makes use of a parametric error model (err) and every amplicon dataset has a different set of error rates.
+
+The learnErrors method learns this error model from the data, by alternating estimation of the error rates and inference of sample composition until they converge on a jointly consistent solution.
+
+As in many machine-learning problems, the algorithm must begin with an initial guess, for which the maximum possible error rates in this data are used (the error rates if only the most abundant sequence is correct and all the rest are errors).
+
+```{r error rates}
+errF <- learnErrors(filtFs, multithread=TRUE)
+errR <- learnErrors(filtRs, multithread=TRUE)
+plotErrors(errF, nominalQ=TRUE)
+```
+
+The error rates for each possible transition (A→C, A→G, …) are shown. Points are the observed error rates for each consensus quality score. The black line shows the estimated error rates after convergence of the machine-learning algorithm. The red line shows the error rates expected under the nominal definition of the Q-score.
+
+Here the estimated error rates (black line) are a good fit to the observed rates (points), and the error rates drop with increased quality as expected. If everything looks reasonable, we can proceed with confidence.
+
+**Considerations for your own data** Parameter learning is computationally intensive, so by default the learnErrors function uses only a subset of the data (the first 100M bases). If you are working with a large dataset and the plotted error model does not look like a good fit, you can try increasing the nbases parameter to see if the fit improves.
+
+### Dereplication
+
+Dereplication combines all identical sequencing reads into into “unique sequences” with a corresponding “abundance” equal to the number of reads with that unique sequence. Dereplication substantially reduces computation time by eliminating redundant comparisons.
+
+Dereplication in the DADA2 pipeline has one crucial addition from other pipelines: DADA2 retains a summary of the quality information associated with each unique sequence. The consensus quality profile of a unique sequence is the average of the positional qualities from the dereplicated reads. These quality profiles inform the error model of the subsequent sample inference step, significantly increasing DADA2’s accuracy.
+
+```{r dereplication}
+derepFs <- derepFastq(filtFs, verbose=F)
+derepRs <- derepFastq(filtRs, verbose=F)
+
+names(derepFs) <- sample.names # Name the derep-class objects by the sample names
+names(derepRs) <- sample.names
+```
+
+### Sample inference
+
+```{r inference}
+dadaFs <- dada(derepFs, err=errF, multithread=TRUE)
+dadaRs <- dada(derepRs, err=errR, multithread=TRUE)
+
+dadaFs[[1]] #Inspection
+dadaRs[[1]]
+```
+
+### Merge paired reads
+
+We now merge the forward and reverse reads together to obtain the full denoised sequences. Merging is performed by aligning the denoised forward reads with the reverse-complement of the corresponding denoised reverse reads, and then constructing the merged “contig” sequences.
+
+By default, merged sequences are only output if the forward and reverse reads overlap by at least 12 bases, and are identical to each other in the overlap region.
+
+```{r merging}
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE)
+```
+
+At this point, you will want to save the mergers object. 
+
+```{r save mergers}
+saveRDS(mergers, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ActiveAnalysis/mergedReads.RDS")
+mergers <- readRDS("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ActiveAnalysis/mergedReads.RDS")
+
+head(mergers[[1]]) # Inspect the merger data.frame from the first sample
+```
+
+The mergers object is a list of data.frames from each sample. Each data.frame contains the merged sequence, its abundance, and the indices of the forward and reverse sequence variants that were merged. Paired reads that did not exactly overlap were removed by mergePairs, further reducing spurious output.
+
+### Construct sequence table 
+
+We can now construct an amplicon sequence variant table (ASV) table, a higher-resolution version of the OTU table produced by traditional methods.
+
+```{r sequence table}
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab)
+table(nchar(getSequences(seqtab))) # Inspect distribution of sequence lengths
+seqtab2 <- seqtab[,nchar(colnames(seqtab)) %in% seq(253,255)] # Remove non-target-length sequences with base R manipulations of the sequence table
+table(nchar(getSequences(seqtab2)))
+seqtab<-seqtab2
+```
+
+### Remove chimeras
+
+The core dada method corrects substitution and indel errors, but chimeras remain. Fortunately, the accuracy of the sequence variants after denoising makes identifying chimeras simpler than it is when dealing with fuzzy OTUs. Chimeric sequences are identified if they can be exactly reconstructed by combining a left-segment and a right-segment from two more abundant “parent” sequences.
+
+```{r chimeras}
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochim)
+sum(seqtab.nochim)/sum(seqtab)
+saveRDS(seqtab.nochim, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/seqtab.nochim.RDS")
+seqtab.nochim <- readRDS("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/seqtab.nochim.RDS")
+```
+
+The frequency of chimeric sequences varies substantially from dataset to dataset, and depends on on factors including experimental procedures and sample complexity. Here chimeras make up about 21% of the merged sequence variants, but when we account for the abundances of those variants we see they account for only about 4% of the merged sequence reads.
+
+*Considerations for your own data*
+
+Most of your reads should remain after chimera removal (it is not uncommon for a majority of sequence variants to be removed though). If most of your reads were removed as chimeric, upstream processing may need to be revisited. In almost all cases this is caused by primer sequences with ambiguous nucleotides that were not removed prior to beginning the DADA2 pipeline.
+
+### Track reads through the pipeline
+
+As a final check of our progress, we’ll look at the number of reads that made it through each step in the pipeline:
+
+```{r track}
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+# If processing a single sample, remove the sapply calls: e.g. replace sapply(dadaFs, getN) with getN(dadaFs)
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+```
+
+Looks good! We kept the majority of our raw reads, and there is no over-large drop associated with any single step.
+
+*Considerations for your own data*
+
+This is a great place to do a last sanity check. Outside of filtering (depending on how stringent you want to be) there should no step in which a majority of reads are lost. If a majority of reads failed to merge, you may need to revisit the truncLen parameter used in the filtering step and make sure that the truncated reads span your amplicon. If a majority of reads were removed as chimeric, you may need to revisit the removal of primers, as the ambiguous nucleotides in unremoved primers interfere with chimera identification.
+
+### Assign taxonomy
+
+The DADA2 package provides a native implementation of the naive Bayesian classifier method for this purpose.
+
+The assignTaxonomy function takes as input a set of sequences to be classified and a training set of reference sequences with known taxonomy, and outputs taxonomic assignments with at least minBoot bootstrap confidence. We maintain formatted training fastas for the RDP training set, GreenGenes clustered at 97% identity, and the Silva reference database, and additional trainings fastas suitable for protists and certain specific environments have been contributed.
+
+*Extensions*
+
+The dada2 package also implements a method to make species level assignments based on exact matching between ASVs and sequenced reference strains. Recent analysis suggests that exact matching (or 100% identity) is the only appropriate way to assign species to 16S gene fragments. Currently, species-assignment training fastas are available for the Silva and RDP 16S databases.
+
+These steps are more computationally intensive and best performed on an external machine. I ran these on a Compute Canada cluster. 
+
+First, at the command line, use `scp` to move the seqtab.nochim.RDS file to the remote server.
+
+```{unix}
+scp seqtab.nochim.RDS wshasta@cedar.computecanada.ca:scratch/ #check to ensure the file was copied
+```
+
+Second, we need to get the silva assignment files on the remote machine. Download them to your local machine then scp the files to your remote directory. 
+
+```{unix}
+scp ~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/NoBarcode/filtered/silva_nr_v132_train_set.fa wshasta@cedar.computecanada.ca:scratch/16SPregnancyProject 
+
+scp ~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/NoBarcode/filtered/silva_species_assignment_v132.fa wshasta@cedar.computecanada.ca:scratch/16SPregnancyProject
+```
+
+In an R script on the remote cluster, assign taxonomy and species. Export the `taxa` object by using `saveRDS`.
+
+```{r taxonomy}
+taxa <- assignTaxonomy(seqtab.nochim, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/NoBarcode/filtered/silva_nr_v132_train_set.fa", multithread=TRUE)
+
+taxa <- addSpecies(taxa, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/NoBarcode/filtered/silva_species_assignment_v132.fa")
+```
+
+Once the job on the remote cluter is complete, scp the taxa object to the local machine to continue with analysis in R. 
+
+```{unix}
+scp wshasta@cedar.computecanada.ca:scratch/16SPregnancyProject/taxa.RDS ~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/
+```
+
+Now use readRDS to save the taxa object in R. 
+
+```{r}
+taxa <- readRDS("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/taxa.RDS")
+taxa.print <- taxa # Removing sequence rownames for display only
+rownames(taxa.print) <- NULL
+head(taxa.print)
+```
+
+### Handoff to Phyloseq package & saving otu table/taxa table for future use
+
+Read in seqtab.nochim if not already in your environment. 
+
+```{r}
+seqtab.nochim <- readRDS("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/seqtab.nochim.RDS")
+rownames(seqtab.nochim)
+```
+
+
+The rownames from your metadata have to match the rownames from your sequencing file.
+
+```{r phyloseq}
+SSRmetadata <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/Metadata/SSRMetaData16SPregnancy_22April.csv")
+SSRmetadata <- as.data.frame(SSRmetadata) #512 samples including males, controls, females
+```
+
+For the purposes of this analysis, we are interested in the females only, since we are focusing on how lactation, pregnancy, and cycling states correspond to microbial community structure. The `SSRmetadata` object contains infomation from all samples, including males and females. To filter out the males, and keep everything else (females and controls) we run the following code.
+
+```{r}
+SSRFemalesMetaData <- SSRmetadata %>% filter(SEX != "Male"); View(SSRFemalesMetaData) #355 samples including controls
+row.names(SSRFemalesMetaData) <- SSRFemalesMetaData$SAMPLE_ID #setting the row names for the metadata to be the sample ID
+```
+
+Note that we have kept the SSRmetadata dataframe which we can use for extra analysis, or if we need to explore the male samples as well. 
+
+#### Matching metadata to sequence table
+
+If seqtab.nochim still contains male samples or samples of females with unknown rep state, remove them with the line of code below.
+
+```{r data cleaning}
+indToRemove <- setdiff(row.names(seqtab.nochim), SSRFemalesMetaData$SAMPLE_ID) #; View(indToRemove)
+```
+
+Let's explore mismatches in our metadata and seqtab.nochim. setdiff(x, y) returns the objects that are in x that are not in y. In our case, the above code returns a list of the male sample IDs since they are still in the sequence table. We will capture the output in the malesToRemove variable and subset out seqtab object.
+
+```{r removing males from seqtab}
+seqtab.nochim2 <-seqtab.nochim[!rownames(seqtab.nochim) %in% indToRemove, ] #; View(rownames(seqtab.nochim2)) #removing the samples in the list "remove"; 338 rows remain
+setdiff(row.names(seqtab.nochim2), SSRFemalesMetaData$SAMPLE_ID) #this should now return 0, since the objects now contain the same sample IDS
+seqtab.nochim <- seqtab.nochim2 #saving changes in the original seqtab object
+```
+
+Some of our samples were not sequenced, yet still may be represented in the metadata. Use setdiff to compare the samples that are in the metadata still, but are not in the seqtab.nochim. Remove them if present. 
+
+```{r}
+setdiff(SSRFemalesMetaData$SAMPLE_ID, row.names(seqtab.nochim)) #this produces a list of females that are in the metadata but NOT in the seqtab
+
+femalesToRemove <- as.character(setdiff(SSRFemalesMetaData$SAMPLE_ID, row.names(seqtab.nochim))) #run the opposite setdiff to ensure that the metadata doesn't contain sample IDs that are not in the seq table.
+
+SSRFemalesMetaData2 <- SSRFemalesMetaData %>%
+                       filter(., !(SAMPLE_ID %in% femalesToRemove)) #; View(SSRFemalesMetaData2) #remove the females from the metadata
+                      
+setdiff(SSRFemalesMetaData2$SAMPLE_ID, row.names(seqtab.nochim)) #confirm the metadata are now matching the seqtab
+SSRFemalesMetaData <- SSRFemalesMetaData2 #save changes into the SSRFemalesMetaData df
+row.names(SSRFemalesMetaData) <- SSRFemalesMetaData$SAMPLE_ID #reset the sample ID as the rownames for the metadata df
+View(SSRFemalesMetaData) #352
+```
+
+Removing positive controls (for time being).
+
+```{r remove positive controls}
+posControl <- c("PositivePC1", "PositivePC2", "PositivePC3", "substr369s1", "substr369s2", "substr476s")
+
+seqtab.nochim3 <-seqtab.nochim[!rownames(seqtab.nochim) %in% posControl, ] #; View(rownames(seqtab.nochim3))
+seqtab.nochim <- seqtab.nochim3
+posToRemove <- as.character(setdiff(SSRFemalesMetaData$SAMPLE_ID, row.names(seqtab.nochim3)))
+SSRFemalesMetaData3 <- SSRFemalesMetaData %>%
+                       filter(., !(SAMPLE_ID %in% posToRemove)) #; View(SSRFemalesMetaData3)
+SSRFemalesMetaData <- SSRFemalesMetaData3
+rownames(SSRFemalesMetaData) <- SSRFemalesMetaData$SAMPLE_ID
+View(SSRFemalesMetaData) #346 rows
+```
+
+Creating a phyloseq object.
+
+```{r}
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
+               sample_data(SSRFemalesMetaData), 
+               tax_table(taxa))
+ps #18633 taxa and 346 samples
+
+otu_tableGF<-as.matrix(otu_table(seqtab.nochim, taxa_are_rows=FALSE))
+write.csv(otu_tableGF,"~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/otuTable22April.csv")
+write.csv(taxa,"~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/taxa22April.csv")
+```
+
+## Microbial ecology: Getting main results
+
+### Obtaining basic stats to report in methods
+
+Choosing a treshold where you believe the sequence exists (5-20 repetitions across whole dataset?, some people like to also decide on how many different samples included that sequence)
+
+```{r filtering again}
+length(which(apply(seqtab.nochim,2,sum)<5)) #setting this to 5 reps across dataset for now
+seqtab.nochim.5<-seqtab.nochim[,-c(which(apply(seqtab.nochim,2,sum)<5))]
+ps <- phyloseq(otu_table(seqtab.nochim.5, taxa_are_rows=FALSE), 
+               sample_data(SSRFemalesMetaData), 
+               tax_table(taxa), package = "decontam")
+ps #8624 taxa and 346 samples 
+saveRDS(ps, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/phyloseqObject22April.RDS")
+```
+
+### Running decontam() on a ps object
+
+#### Inspecting library sizes
+
+Be sure your metadata sheet has a column that identifies the sample as control or sample.
+
+```{r}
+head(sample_data(ps))
+df <- as.data.frame(sample_data(ps)) # Put sample_data into a ggplot-friendly data.frame
+df$LibrarySize <- sample_sums(ps)
+df <- df[order(df$LibrarySize),]
+df$Index <- seq(nrow(df))
+ggplot(data=df, aes(x=Index, y=LibrarySize, color=SampleOrControl)) + geom_point()
+saveRDS(df, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/sampleDataDF22April.RDS")
+```
+
+#### Identify contaminants - prevalence
+
+In this contaminant identification method we’ll use the “prevalence” method. In this method, the prevalence (presence/absence across samples) of each sequence feature in true positive samples is compared to the prevalence in negative controls to identify contaminants.
+
+```{r}
+sample_data(ps)$is.neg <- sample_data(ps)$SampleOrControl == "Control" #creating a column that displays a logical response to if smaple is control or true sample
+
+contamdf.prev <- isContaminant(ps, method="prevalence", neg="is.neg") #running the function to test if seqs are contaminants or not
+table(contamdf.prev$contaminant)
+head(which(contamdf.prev$contaminant))
+
+contamdf.prev05 <- isContaminant(ps, method="prevalence", neg="is.neg", threshold=0.5) #altering the default threshold
+table(contamdf.prev05$contaminant)
+```
+
+Let’s take a look at the number of times several of these taxa were observed in negative controls and positive samples.
+
+```{r}
+# Make phyloseq object of presence-absence in negative controls and true samples
+ps.pa <- transform_sample_counts(ps, function(abund) 1*(abund>0))
+ps.pa.neg <- prune_samples(sample_data(ps.pa)$SampleOrControl == "Control", ps.pa)
+ps.pa.pos <- prune_samples(sample_data(ps.pa)$SampleOrControl == "Sample", ps.pa)
+
+# Make data.frame of prevalence in positive and negative samples
+df.pa <- data.frame(pa.pos=taxa_sums(ps.pa.pos), pa.neg=taxa_sums(ps.pa.neg),
+                      contaminant=contamdf.prev05$contaminant)
+ggplot(data=df.pa, aes(x=pa.neg, y=pa.pos, color=contaminant)) + geom_point() +
+  xlab("Prevalence (Negative Controls)") + ylab("Prevalence (True Samples)")
+```
+
+Samples seem to split pretty cleanly into a branch that shows up mostly in positive samples, and another that shows up mostly in negative controls, and the contaminant assignment has done a good job of identifying those mostly in negative controls.
+
+Removing contaminants from the phyloseq object.
+
+```{r}
+contamdf.prev05$contamSeq <- rownames(contamdf.prev05) #making the rownames (the sequences) their own column
+#contamdf.prev05$contamSeq <- This should now be your contaminant sequences
+
+toKeepdf <- contamdf.prev05 %>% filter(contaminant == "FALSE") #creating a subset dataframe with only the seqs we want to keep (non-contaminants)
+toKeepList <- toKeepdf$contamSeq #creating a character vector of those non-contam seqs
+ps <- prune_taxa(toKeepList, ps) #removing contaminant taxa 
+ps #8613 taxa and 346 samples
+```
+
+Let's rerun the contamination detection step to see if it worked.
+
+```{r}
+sample_data(ps)$is.neg <- sample_data(ps)$SampleOrControl == "Control"
+contamdf.prev05 <- isContaminant(ps, method="prevalence", neg="is.neg", threshold=0.5) #altering the default threshold
+table(contamdf.prev05$contaminant) #It has detected no more contaminants
+```
+
+Re-running the removal step, if needed.
+
+```{r}
+contamdf.prev05$contamSeq <- rownames(contamdf.prev05) #making the rownames (the sequences) their own column
+#contamdf.prev05$contamSeq <- This should now be your contaminant sequences
+
+toKeepdf <- contamdf.prev05 %>% filter(contaminant == "FALSE") #creating a subset dataframe with only the seqs we want to keep (non-contaminants)
+toKeepList <- toKeepdf$contamSeq #creating a character vector of those non-contam seqs
+ps <- prune_taxa(toKeepList, ps) #removing contaminant taxa
+ps #8674 taxa and 330 samples
+```
+
+Check again to see if it worked.
+
+```{r}
+sample_data(ps)$is.neg <- sample_data(ps)$SampleOrControl == "Control"
+contamdf.prev05 <- isContaminant(ps, method="prevalence", neg="is.neg", threshold=0.5) #altering the default threshold
+table(contamdf.prev05$contaminant) #It has detected 0 more contaminants and we can proceed
+```
+
+### Pruning controls from the phyloseq object
+
+```{r}
+samplesKeep <- prune_samples(sample_data(ps)$SampleOrControl == "Sample", ps) #removing all but true samples, since controls were already used to decontaminate
+ps <- samplesKeep #once we know the samples were pruned, we can save that in our main ps object; note that we now have 335 samples, all of which are from female monkeys
+ps #8613 taxa and 334 samples
+```
+
+### Removing samples with very few reads
+
+Now that we have decontaminated the samples, and filtered so that we now only have female monkeys, let's check to see if any very low read samples remain. 
+
+```{r}
+which(!rowSums(otu_table(ps)) > 1000) #this returns the samples that have fewer than 1000 reads
+```
+
+Let's remove any samples with fewer than 1000 reads from the ps object.
+
+```{r}
+toRemove <- c("JA15145-060M", "JA15145-070M", "JA15145-071M", "212M", "343-Perdita", "362-Abu", "416-Lunalovegood", "475-Ed")
+psKeep <- prune_samples(!sample_data(ps)$SAMPLE_ID %in% toRemove, ps)
+ps <- psKeep; ps #8613 taxa and 326 samples 
+```
+
+Let's now remove these same samples from the metadata object, as well as subset it to be samples only
+
+```{r}
+SSRFemalesMetaData <- SSRFemalesMetaData %>% filter(!SAMPLE_ID %in% toRemove)
+SSRF_Samples <- SSRFemalesMetaData %>% filter(SampleOrControl == "Sample")
+rownames(SSRF_Samples) <- SSRF_Samples$SAMPLE_ID
+```
+
+### Removing uncharacterized phyla
+
+```{r}
+ps <- subset_taxa(ps, !is.na(Phylum) & !Phylum %in% c("", "uncharacterized"))
+ps #8573 taxa and 326 samples
+```
+
+### Removing mitochondria and chloroplasts
+
+```{r}
+ps0 <- subset_taxa(ps, !is.na(Class) & !Class %in% c("Chloroplast")) 
+ps0 #8497 taxa and 326 samples
+ps <- ps0 #saving changes in ps
+```
+
+```{r}
+ps0 <- subset_taxa(ps, !is.na(Family) & !Family %in% c("Mitochondria")) 
+ps0 #7373 taxa and 326 samples
+ps <- ps0
+```
+
+A useful next step is to explore feature prevalence in the dataset, which we will define here as the number of samples in which a taxa appears at least once. (from f1000 paper)
+
+```{r}
+# Compute prevalence of each feature, store as data.frame
+prevdf <- apply(X = otu_table(ps),
+                 MARGIN = ifelse(taxa_are_rows(ps), yes = 1, no = 2),
+                 FUN = function(x){sum(x > 0)})
+# Add taxonomy and total read counts to this data.frame
+prevdf <- data.frame(Prevalence = prevdf,
+                      TotalAbundance = taxa_sums(ps),
+                      tax_table(ps))
+```
+
+Are there phyla that are comprised of mostly low-prevalence features? Compute the total and average prevalences of the features in each phylum.
+
+```{r}
+plyr::ddply(prevdf, "Phylum", function(df1){cbind(mean(df1$Prevalence),sum(df1$Prevalence))})
+```
+
+```{r}
+# Define phyla to filter
+filterPhyla = c("Deferribacteres", "Dependentiae", "Entotheonellaeota", "Fibrobacteres", "Lentisphaerae", "Rokubacteria")
+
+# Filter entries with unidentified Phylum.
+ps1 <- subset_taxa(ps, !Phylum %in% filterPhyla)
+ps1 #7355 taxa and 326 samples
+ps <- ps1
+```
+
+Prevalence Filtering
+
+```{r}
+# Subset to the remaining phyla
+prevdf1 <- subset(prevdf, Phylum %in% get_taxa_unique(ps, "Phylum"))
+ggplot(prevdf1, aes(TotalAbundance, Prevalence / nsamples(ps),color=Phylum)) +
+  # Include a guess for parameter
+    geom_hline(yintercept = 0.05, alpha = 0.5, linetype = 2) + 
+    geom_point(size = 2, alpha = 0.7) +
+    scale_x_log10() +
+    xlab("Total Abundance") + 
+    ylab("Prevalence [Frac. Samples]") +
+    facet_wrap(~Phylum) + 
+    theme(legend.position="none")
+```
+
+```{r}
+#  Define prevalence threshold as 5% of total samples
+prevalenceThreshold <- 0.05 * nsamples(ps)
+prevalenceThreshold
+
+# Execute prevalence filter, using `prune_taxa()` function
+keepTaxa <- rownames(prevdf1)[(prevdf1$Prevalence >= prevalenceThreshold)]
+ps2 <- prune_taxa(keepTaxa, ps)
+ps2 #318 taxa and 326 samples
+ps <- ps2
+saveRDS(ps, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/psObjectClean22April.RDS")
+ps <- readRDS("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/psObjectClean22April.RDS")
+```
+
+Removing NA reproductive statuses from ps object and metadata
+
+```{r}
+psRep <- prune_samples(!is.na(sample_data(ps)$REP_STATE), ps)
+ps <- psRep #318 taxa and 312 samples
+
+SSRF_SamplesRep <- SSRF_Samples %>%
+                filter(., !is.na(REP_STATE)) #removing NA rows for REP_STATE
+
+SSRF_Samples <- SSRF_SamplesRep %>%
+                dplyr::select(-X, -X.1) #saving into SSRF_Samples, removign unnecessary columns
+
+rownames(SSRF_Samples) <- SSRF_Samples$SAMPLE_ID #adding SAMPLE_ID as rownames
+```
+
+
+### Agglomerate taxa
+
+When there is known to be a lot of species or sub-species functional redundancy in a microbial community, it might be useful to agglomerate the data features corresponding to closely related taxa. Ideally we would know the functional redundancies perfectly ahead of time, in which case we would agglomerate taxa using those defined relationships and the merge_taxa() function in phyloseq. That kind of exquisite functional data is usually not available, and different pairs of microbes will have different sets of overlapping functions, complicating the matter of defining appropriate grouping criteria.
+
+```{r}
+# How many genera would be present after filtering?
+length(get_taxa_unique(ps, taxonomic.rank = "Genus"))
+
+## [1] 137 genera
+
+psGlom <- tax_glom(ps, "Genus", NArm = TRUE)
+psGlom #136 taxa and 312 samples
+```
+
+### Tailoring to different research questions
+
+Abundance value transformation
+
+It is usually necessary to transform microbiome count data to account for differences in library size, variance, scale, etc. The phyloseq package provides a flexible interface for defining new functions to accomplish these transformations of the abundance values via the transform_sample_counts() function. The first argument to this function is the phyloseq object you want to transform, and the second argument is an R function that defines the transformation. The R function is applied sample-wise, expecting that the first unnamed argument is a vector of taxa counts in the same order as the phyloseq object. Additional arguments are passed on to the function specified in the second argument, providing an explicit means to include pre-computed values, previously defined parameters/thresholds, or any other object that might be appropriate for computing the transformed values of interest.
+
+#### Function for plotting abundance according to reproductive state
+
+```{r}
+plot_abundance_REP_STATE <- function(physeq,title = "",
+			     Facet = "Order", Color = "Phylum"){
+  # Arbitrary subset, based on Phylum, for plotting
+  p1f <- subset_taxa(physeq, Phylum %in% c("Firmicutes"))
+  mphyseq <- psmelt(p1f)
+  mphyseq <- subset(mphyseq, Abundance > 0)
+  ggplot(data = mphyseq, mapping = aes_string(x = "REP_STATE",y = "Abundance",
+                                 color = Color, fill = Color)) +
+    geom_violin(fill = NA) +
+    geom_point(size = 1, alpha = 0.3,
+                position = position_jitter(width = 0.3)) +
+    facet_wrap(facets = Facet) + scale_y_log10()+
+    theme(legend.position="none")
+}
+```
+
+#### Function for plotting abundance according to color vision phentoype (for IPS project)
+
+```{r}
+plot_abundance_VISION <- function(physeq,title = "",
+			     Facet = "Order", Color = "Phylum"){
+  # Arbitrary subset, based on Phylum, for plotting
+  p1f <- subset_taxa(physeq, Phylum %in% c("Firmicutes"))
+  mphyseq <- psmelt(p1f)
+  mphyseq <- subset(mphyseq, Abundance > 0)
+  ggplot(data = mphyseq, mapping = aes_string(x = "PHENOTYPE",y = "Abundance",
+                                 color = Color, fill = Color)) +
+    geom_violin(fill = NA) +
+    geom_point(size = 1, alpha = 0.3,
+                position = position_jitter(width = 0.3)) +
+    facet_wrap(facets = Facet) + scale_y_log10()+
+    theme(legend.position="none")
+}
+```
+
+#### Function for plotting abundance according to dietary variables
+
+```{r}
+plot_abundance_DIET <- function(physeq,title = "",
+			     Facet = "Order", Color = "Phylum"){
+  # Arbitrary subset, based on Phylum, for plotting
+  p1f <- subset_taxa(physeq, Phylum %in% c("Firmicutes"))
+  mphyseq <- psmelt(p1f)
+  mphyseq <- subset(mphyseq, Abundance > 0)
+  ggplot(data = mphyseq, mapping = aes_string(x = "DIET",y = "Abundance",
+                                 color = Color, fill = Color)) +
+    geom_violin(fill = NA) +
+    geom_point(size = 1, alpha = 0.3,
+                position = position_jitter(width = 0.3)) +
+    facet_wrap(facets = Facet) + scale_y_log10()+
+    theme(legend.position="none")
+}
+```
+
+#### Function for plotting abundance according to month
+
+```{r}
+plot_abundance_MONTH <- function(physeq,title = "",
+			     Facet = "Order", Color = "Phylum"){
+  # Arbitrary subset, based on Phylum, for plotting
+  p1f <- subset_taxa(physeq, Phylum %in% c("Firmicutes"))
+  mphyseq <- psmelt(p1f)
+  mphyseq <- subset(mphyseq, Abundance > 0)
+  ggplot(data = mphyseq, mapping = aes_string(x = "MONTH",y = "Abundance",
+                                 color = Color, fill = Color)) +
+    geom_violin(fill = NA) +
+    geom_point(size = 1, alpha = 0.3,
+                position = position_jitter(width = 0.3)) +
+    facet_wrap(facets = Facet) + scale_y_log10()+
+    theme(legend.position="none")
+}
+```
+
+The transformation in this case converts the counts from each sample into their frequencies, often referred to as proportions or relative abundances. This function is so simple that it is easiest to define it within the function call to transform_sample_counts().
+
+#### Plotting abundance according to reproductive state
+
+```{r}
+# Transform to relative abundance. Save as new object.
+
+psGlomRa <- transform_sample_counts(psGlom, function(x){x / sum(x)})
+#ord.NMDS.bray <- ordinate(ps3ra, method = "NMDS", distance = "bray")
+#plot_ordination(ps3ra, ord.NMDS.bray, color = "REP_STATE")
+
+plotBefore <- plot_abundance_REP_STATE(psGlom,"")
+plotAfter <- plot_abundance_REP_STATE(psGlomRa,"")
+# Combine each plot into one graphic.
+grid.arrange(nrow = 2, plotBefore, plotAfter)
+```
+
+#### Plotting abundance according to color vision phenotype
+
+```{r}
+plotBeforeVISION <- plot_abundance_VISION(ps3,"")
+plotAfterVISION <- plot_abundance_VISION(ps3ra,"")
+# Combine each plot into one graphic.
+grid.arrange(nrow = 2, plotBeforeVISION, plotAfterVISION)
+```
+
+#### Plotting abundance according to DIET
+
+```{r}
+plotBeforeDIET <- plot_abundance_DIET(ps3,"")
+plotAfterDIET <- plot_abundance_DIET(ps3ra,"")
+# Combine each plot into one graphic.
+grid.arrange(nrow = 2, plotBeforeDIET, plotAfterDIET)
+```
+
+#### Plotting abundance according to MONTH
+
+```{r}
+plotBeforeMONTH <- plot_abundance_MONTH(ps3,"")
+plotAfterMONTH <- plot_abundance_MONTH(ps3ra,"")
+# Combine each plot into one graphic.
+grid.arrange(nrow = 2, plotBeforeMONTH, plotAfterMONTH)
+```
+
+Subset by taxonomy
+
+```{r}
+psOrd <- subset_taxa(ps3ra, Order == "Lactobacillales")
+plot_abundance_VISION(psOrd, Facet = "Genus", Color = NULL)
+```
+
+Preprocessing
+
+Before doing the multivariate projections, we will add a few columns to our sample data, which can then be used to annotate plots. We record the total number of counts seen in each sample and log-transform the data as an approximate variance stabilizing transformation.
+
+```{r}
+#qplot(sample_data(ps)$AgeYEARS, geom = "histogram") + xlab("age")
+qplot(log10(rowSums(otu_table(ps)))) +
+  xlab("Logged counts-per-sample")
+pslog <- transform_sample_counts(ps, function(x) log(1 + x))
+```
+
+Saving some objects. 
+
+```{r}
+saveRDS(ps, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/phyloseqObject.RDS")
+saveRDS(ps3, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/phyloseqObject3.RDS")
+saveRDS(pslog, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/phyloseqLog.RDS")
+#saveRDS(vst.blind.Mat,"~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/vst.blind.Mat.RDS")
+#saveRDS(vst.blind, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/vst.blind.RDS")
+```
+
+### Beta-diversity (aka community structure/composition)
+
+*PERMANOVA with adonis function
+What is the model we want to test?
+Many models can be statistically accurate/robust but few are biologically relevant.
+Make sure to base your model on biologically relevant question.
+Option with repeated measures from many individuals (time-series)
+
+```{r betadiv}
+# Create function geo means for Variance Stabilizing Transformation
+gm_mean <- function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
+
+# Variance Stabilizing Transformation (REP_STATE)
+test.phyloseq.dds<-phyloseq_to_deseq2(ps,~REP_STATE)
+test.phyloseq.dds <- estimateSizeFactors(test.phyloseq.dds, geoMeans = apply(counts(test.phyloseq.dds), 1, gm_mean))
+vst.blind <- DESeq2::varianceStabilizingTransformation(test.phyloseq.dds, blind=TRUE)
+vst.blind.Mat <- SummarizedExperiment::assay(vst.blind) # Extract transformed OTU table
+vst.blind.Mat<-t(vst.blind.Mat)
+vst.blind.Mat[which(vst.blind.Mat<0)]<-0
+dists <- dist(t(assay(vst.blind)))
+
+# Computing Bray-Curtis Dissimilarities and PCoA
+comm.vst.blind.Mat <- vegdist(vst.blind.Mat, "bray")
+PCoA.comm.vst.blind.Mat<-capscale(comm.vst.blind.Mat~1,distance="bray")
+PCoA.comm.vst.blind.Mat$CA$eig[1:3]/sum(PCoA.comm.vst.blind.Mat$CA$eig)
+PCoA.comm.vst.blind.Mat #this will re-order rownames to be alphabetic, which is not the way they are in the metadata csv. you will need to ensure the metadata file and this object have the same rownames before proceedingto plotting or linear models
+eig <- PCoA.comm.vst.blind.Mat$CA$eig
+
+# Portion of total vraiation in community structure explained by each of the main three components
+eig[1]/sum(abs(eig)) #
+eig[2]/sum(abs(eig)) #
+eig[3]/sum(abs(eig)) #
+
+# Save scores in dataset tables
+test_df <- SSRF_Samples[ order(row.names(SSRF_Samples)), ]
+SSRF_Samples <- test_df
+
+row.names(SSRF_Samples)<-row.names(scores(PCoA.comm.vst.blind.Mat)$sites) 
+SSRF_Samples$PCoA1<-scores(PCoA.comm.vst.blind.Mat)$sites[,1]
+SSRF_Samples$PCoA2<-scores(PCoA.comm.vst.blind.Mat)$sites[,2]
+
+# PERMANOVA
+
+permanovaREP_STATEdietTypeMONTH<-adonis(comm.vst.blind.Mat ~ REP_STATE + dietType + MONTH + INDIVIDUAL + Rainfall, data=SSRF_Samples, permutations = 2000)
+permanovaREP_STATEdietTypeMONTH$aov.tab
+
+```
+
+### PCoA with ggplot2
+
+Let's visualize beta-diversity in a figure using PCoA with Bray-Curtis distances. 
+
+```{r PCoA}
+summary(SSRF_Samples)
+
+SSRF_Samples$REP_STATE <- factor(SSRF_Samples$REP_STATE, levels = c("Cycling","Pregnant", "Nursing")) #changing the order of the levels of rep-state from alphabetical to the order we want them in the plots
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "grey42") #colorblind friendly palette
+
+#test.1 <- qplot(SSRF_Samples$PCoA1, SSRF_Samples$PCoA2, xlab="PCoA1 [14.05%]",
+              #ylab="PCoA2 [6.8%]", size=0.5, fill=REP_STATE, color=REP_STATE, data=(SSRF_Samples)); test.1 #qplot version
+
+betaDivPCoA <- ggplot(SSRF_Samples, aes(PCoA1, PCoA2, color = REP_STATE)) +
+               geom_point(size = 3) +
+               labs(x = "\nPCoA1 [18.5% variance]", y = "PCoA2 [8.8% variance]\n") +
+               scale_color_manual(name = NULL, values = c("#999999", "#E69F00", "#56B4E9")) + #filling in the rep_states with cb friendly colors
+               theme_bw() # + #removing the gray grid in the background
+               #facet_wrap(~INDIVIDUAL); betaDivPCoA #ggplot version
+
+betaDivInd <- betaDivPCoA +
+              facet_wrap(~INDIVIDUAL)
+
+betaDivPCoAmonth <- ggplot(SSRF_Samples, aes(PCoA1, PCoA2, color = MONTH)) +
+               geom_point(size = 3) +
+               labs(x = "\nPCoA1 [18.5% variance]", y = "PCoA2 [8.8% variance]\n") +
+               scale_color_manual(name = NULL, values = cbPalette) + #filling in the rep_states with cb friendly colors
+               theme_bw() +
+               stat_ellipse()
+
+betaDivInfants1 <- ggplot(SSRF_Samples, aes(PCoA1, PCoA2, color = InfantSurvive1Year)) +
+               geom_point(size = 3) +
+               labs(x = "\nPCoA1 [18.5% variance]", y = "PCoA2 [8.8% variance]\n") +
+               scale_color_manual(name = NULL, values = c("#999999", "#E69F00", "#56B4E9")) + #filling in the rep_states with cb friendly colors
+               theme_bw() 
+
+betaDivInfants3 <- ggplot(SSRF_Samples, aes(PCoA1, PCoA2, color = InfantSurvive3Years)) +
+               geom_point(size = 3) +
+               labs(x = "\nPCoA1 [18.5% variance]", y = "PCoA2 [8.8% variance]\n") +
+               scale_color_manual(name = NULL, values = c("#999999", "#E69F00", "#56B4E9")) + #filling in the rep_states with cb friendly colors
+               theme_bw()
+```
+
+```{r PCoA}
+test.2 <- qplot(SSRF_Samples$PCoA1, SSRF_Samples$PCoA2, xlab="PCoA1",
+              ylab="PCoA2", size=0.5, fill=dietType, color=dietType, data=(SSRF_Samples)); test.2
+
+test.3 <- qplot(SSRF_Samples$PCoA1, SSRF_Samples$PCoA2, xlab="PCoA1",
+              ylab="PCoA2", size=0.5, fill=MONTH, color=MONTH, data=(SSRF_Samples)); test.3
+
+testInd <- qplot(SSRF_Samples$PCoA1, SSRF_Samples$PCoA2, xlab="PCoA1",
+              ylab="PCoA2", size=0.5, fill=IND_CODE, color=IND_CODE, data=(SSRF_Samples)); testInd
+
+testGroup <- qplot(SSRF_Samples$PCoA1, SSRF_Samples$PCoA2, xlab="PCoA1",
+              ylab="PCoA2", size=0.5, fill=GROUP, color=GROUP, data=(SSRF_Samples)); testGroup
+
+testCater <- qplot(SSRF_Samples$PCoA1, SSRF_Samples$PCoA2, xlab="PCoA1",
+              ylab="PCoA2", size=0.5, fill=caterPresent, color=caterPresent, data=(SSRF_Samples)); testCater
+
+testInsects <- qplot(SSRF_Samples$PCoA1, SSRF_Samples$PCoA2, xlab="PCoA1",
+              ylab="PCoA2", size=0.5, fill=insectsPresent, color=insectsPresent, data=(SSRF_Samples)); testInsects
+
+test.1 + theme_bw() + 
+         theme(legend.title = element_text(colour="black", size=18, face="bold"),
+                     legend.text = element_text(colour="black", size = 18),
+                     axis.title=element_text(face="bold",size="18", color="black"),
+                     legend.position="right",
+                     plot.title=element_text(face="bold",size=18),
+                     strip.text.x=element_text(size=12,face="bold"),
+                     strip.background=element_rect(colour="black",fill="turquoise")) +
+          guides(size=FALSE) +
+          stat_ellipse(aes(x=PCoA2, y=PCoA2, color = REP_STATE), type = "norm")
+```
+
+### Canonical Correspondence Analysis
+
+```{r}
+# creating tax object
+
+tax <- tax_table(ps) %>%
+  data.frame(stringsAsFactors = FALSE)
+```
+
+```{r}
+pslog #log transformed sample counts
+
+ps_ccpna <- ordinate(pslog, "CCA", formula = pslog ~ REP_STATE) # can add more variables here
+
+ps_scores <- vegan::scores(ps_ccpna)
+sites <- data.frame(ps_scores$sites)
+sites$SampleID <- rownames(sites)
+sites <- sites %>%
+  left_join(data.frame(sample_data(ps)), by = c("SampleID" = "SAMPLE_ID"))
+
+species <- data.frame(ps_scores$species)
+species$otu_id <- seq_along(colnames(otu_table(ps)))
+species$ASV <- rownames(species)
+tax$ASV <- rownames(tax)
+species <- species %>%
+  left_join(tax)
+evals_prop <- 100 * ps_ccpna$CCA$eig[1:2] / sum(ps_ccpna$CA$eig)
+
+ggplot() +
+  geom_point(data = sites, aes(x = CCA1, y = CCA2), shape = 2, alpha = 0.5) +
+  geom_point(data = species, aes(x = CCA1, y = CCA2, col = Phylum), size = 0.5) +
+  #geom_text_repel(data = species %>% filter(CCA2 < -2),
+                    #aes(x = CCA1, y = CCA2, label = otu_id),
+            #size = 1.5, segment.size = 0.1) +
+  #facet_grid(. ~ REP_STATE) +
+  guides(col = guide_legend(override.aes = list(size = 3))) +
+  labs(x = sprintf("Axis1 [%s%% variance]", round(evals_prop[1], 2)),
+        y = sprintf("Axis2 [%s%% variance]", round(evals_prop[2], 2))) +
+  scale_color_brewer(palette = "Set2") +
+  coord_fixed(sqrt(ps_ccpna$CCA$eig[2] / ps_ccpna$CCA$eig[1])*0.45   ) +
+  theme(panel.border = element_rect(color = "#787878", fill = alpha("white", 0)))
+```
+
+
+## Microbial ecology: Plotting results and statistical tests
+### Alpha-diversity (Shannon) vs. species richness (Chao1)
+
+For richness, we can use ps1, which is not filtered by prevalence.
+
+```{r}
+ps1 <- prune_samples(!is.na(sample_data(ps1)$REP_STATE), ps1)
+ps1 <- #7355 taxa and 312 samples
+```
+
+
+*CHAO1
+
+```{r computation}
+adiv<-estimate_richness(ps,measures=c("Observed","Shannon","Chao1"))
+SSRF_Samples$alphadiv<-adiv$Shannon
+hist(SSRF_Samples$alphadiv)
+SSRF_Samples$chao1<-adiv$Chao1
+hist(SSRF_Samples$chao1)
+SSRF_Samples$evenness<-adiv$Shannon/log(adiv$Observed)
+```
+
+Boxplots with ggplot2
+
+```{r boxplots}
+p<-ggplot(SSRF_Samples, aes(REP_STATE, chao1,fill=REP_STATE)) +
+  theme_bw()+
+  geom_boxplot(alpha=0.6)+
+  xlab("")+ylab("Species Richness\n(Chao1)\n")+
+  #theme(axis.text.x  = element_text(size=12, color="black"),
+        #axis.text.y  = element_text(size=12, color="black"),
+        #axis.title.x  = element_text(size=14, color="black",face="bold"),
+        #axis.title.y  = element_text(size=14, color="black",face="bold"))+
+  scale_fill_manual(values = c("#999999", "#E69F00", "#56B4E9", "#009E73")) +
+  scale_x_discrete(labels = c("", "", "", "")) +
+  theme(axis.text.x = element_text(vjust = 0.4),
+         axis.ticks.x = element_blank(),
+         text = element_text(size = 15)) +
+  guides(fill=F,color=F);p
+
+p2<-ggplot(SSRF_Samples, aes(REP_STATE, alphadiv,fill=REP_STATE)) +
+  theme_bw() +
+  geom_boxplot(alpha=0.6) +#geom_jitter(width=0.1) +
+  xlab("") + ylab("Alpha Diversity\n(Shannon Index)\n") +
+  #theme(axis.text.x  = element_text(size=12, color="black"),
+   #     axis.text.y  = element_text(size=12, color="black"),
+    #    axis.title.x  = element_text(size=14, color="black",face="bold"),
+     #   axis.title.y  = element_text(size=14, color="black",face="bold")) +
+  scale_fill_manual(values = c("#999999", "#E69F00", "#56B4E9", "#009E73")) +
+  scale_x_discrete(breaks = c("Cycling", "Pregnant", "UnverifiedPregnancy", "Nursing"),
+                   labels = c("Cycling", "Pregnant", "Unverified\nPregnancy", "Nursing")) +
+  theme(axis.text.x = element_text(vjust = 0.4),
+        axis.ticks.x = element_blank(),
+        text = element_text(size = 15)) +
+  guides(fill=F,color=F);p2
+
+library(gtable); library(grid); library(gridExtra)
+g1 <- ggplotGrob(p)
+g2 <- ggplotGrob(p2)
+g <- rbind(g1, g2, size = "first")
+g$widths <- unit.pmax(g1$widths, g2$widths)
+grid.newpage()
+grid.draw(g)
+```
+
+### Significant differences between groups/rep states
+
+Linear models, anovas, & Post-hoc tests
+
+```{r linear model}
+# Chao1
+summary(fm1<-aov(log(chao1)~REP_STATE, data=SSRF_Samples))
+post_oc<-TukeyHSD(fm1, "REP_STATE", ordered=FALSE); post_oc
+
+#Shannon
+summary(fm1<-aov(log(alphadiv)~REP_STATE, data=SSRF_Samples))
+post_oc<-TukeyHSD(fm1, "REP_STATE", ordered=FALSE); post_oc
+```
+
+Non-parametric tests & Post-hoc tests
+
+```{r non-para}
+# Chao1
+kruskal.test(chao1~REP_STATE, data=SSRF_Samples)
+#dunnTest(data=SSRFemalesMetaData,chao1~REP_STATE, method="bh")
+
+# Shannon
+kruskal.test(alphadiv~REP_STATE, data=SSRF_Samples)
+#dunnTest(data=SSRFemalesMetaData,alphadiv~REP_STATE, method="bh")
+```
+
+Linear-mixed models
+
+```{r linear mixed model}
+# Chao1
+fit_chao1 <- lmer(chao1~ REP_STATE + (1 | INDIVIDUAL),data=SSRF_Samples)
+anova(fit_chao1,ddf="lme4",test="F")
+
+# Shannon
+fit_shannon <- lmer(alphadiv~ REP_STATE + (1 | INDIVIDUAL),data=SSRF_Samples)
+anova(fit_shannon,ddf="lme4",test="F")
+```
+
+### Top genera in community
+
+```{r top genera}
+GF_comm<-as.matrix(t(otu_table(psGlom, taxa_are_rows=FALSE))) #using agglomerated taxa
+dim(GF_comm) #143 312
+rel_abun_GF<-sweep(GF_comm, 2, apply(GF_comm,2,sum), `/`)
+dim(rel_abun_GF) #128 312
+apply(rel_abun_GF,2,sum)
+dim(rel_abun_GF)[1]->t
+apply(rel_abun_GF,1,sum)
+order(apply(rel_abun_GF,1,sum))[(t-9):t]
+top10_asvs_GF<-names(apply(rel_abun_GF,1,sum)[order(apply(rel_abun_GF,1,sum))[(t-9):t]])
+
+taxa[top10_asvs_GF,]->top10_taxa_GF
+row.names(top10_taxa_GF)<-c(length(row.names(top10_taxa_GF)):1)
+paste("asv_",row.names(top10_taxa_GF),sep="")->row.names(top10_taxa_GF)
+top10_taxa_GF
+
+# Test for changes in relative abundance in dominant taxa
+rel_abun_top10_asvs<-rel_abun_GF[top10_asvs_GF,]
+row.names(rel_abun_top10_asvs)<-row.names(top10_taxa_GF)
+rel_abun_top10_asvs<-t(rel_abun_top10_asvs)
+rel_abun_top10_asvs<-as.data.frame(rel_abun_top10_asvs)
+rel_abun_top10_asvs$SAMPLE_ID<-row.names(rel_abun_top10_asvs)
+SSRF_Samples$REP_STATE[as.factor(row.names(rel_abun_top10_asvs))]->rel_abun_top10_asvs$REP_STATE
+long_rel_abun_top10_asvs<-tidyr::gather(rel_abun_top10_asvs, key=SAMPLE_ID, value=rel_abund, asv_10:asv_1)
+dim(long_rel_abun_top10_asvs)
+colnames(long_rel_abun_top10_asvs)[2]<-"asv_ID"
+long_rel_abun_top10_asvs$plot_ID<-paste(long_rel_abun_top10_asvs$asv_ID,long_rel_abun_top10_asvs$REP_STATE,sep="")
+
+top10df <- as.data.frame(top10_taxa_GF)
+top10df$asv_ID <- rownames(top10df)
+
+# Creating log10 column in long_rel_abun_top10_asvs
+testLogDf <- long_rel_abun_top10_asvs %>%
+             mutate(log10_rel_abund = log10(rel_abund))
+
+for (i in 1:10){
+  print(colnames(rel_abun_top10_asvs[i]))
+  print(kruskal.test(rel_abun_top10_asvs[,i] ~ REP_STATE, data=rel_abun_top10_asvs))
+  #print(dunnTest(rel_abun_top10_asvs[,i] ~ REP_STATE, data=rel_abun_top10_asvs, method="bh"))
+}
+
+limitsX <- c("asv_1Cycling", "asv_1Pregnant", "asv_1Nursing", "", 
+             "asv_2Cycling", "asv_2Pregnant", "asv_2Nursing", "",
+             "asv_3Cycling", "asv_3Pregnant", "asv_3Nursing", "",
+             "asv_4Cycling", "asv_4Pregnant", "asv_4Nursing", "",
+             "asv_5Cycling", "asv_5Pregnant", "asv_5Nursing", "",
+             "asv_6Cycling", "asv_6Pregnant", "asv_6Nursing", "",
+             "asv_7Cycling", "asv_7Pregnant", "asv_7Nursing", "",
+             "asv_8Cycling", "asv_8Pregnant", "asv_8Nursing", "",
+             "asv_9Cycling", "asv_9Pregnant", "asv_9Nursing", "",
+             "asv_10Cycling", "asv_10Pregnant", "asv_10Nursing")
+
+breaksX <- c("asv_1Cycling", "asv_1Pregnant", "asv_1Nursing", "", 
+             "asv_2Cycling", "asv_2Pregnant", "asv_2Nursing", "",
+             "asv_3Cycling", "asv_3Pregnant", "asv_3Nursing", "",
+             "asv_4Cycling", "asv_4Pregnant", "asv_4Nursing", "",
+             "asv_5Cycling", "asv_5Pregnant", "asv_5Nursing", "",
+             "asv_6Cycling", "asv_6Pregnant", "asv_6Nursing", "",
+             "asv_7Cycling", "asv_7Pregnant", "asv_7Nursing", "",
+             "asv_8Cycling", "asv_8Pregnant", "asv_8Nursing", "",
+             "asv_9Cycling", "asv_9Pregnant", "asv_9Nursing", "",
+             "asv_10Cycling", "asv_10Pregnant", "asv_10Nursing")
+
+labelsX <- c("", "Streptococcus", "", "", 
+             "","Bifidobacterium", "", "",
+             "", "Rothia", "", "", 
+             "", "Lachnoclostridium", "", "", 
+             "", "Megamonas", "", "", 
+             "", "Collinsella", "", "", 
+             "", "Escherichia/\nShigella", "", "",
+             "", "Bacteroides", "", "",
+             "", "Enterococcus", "", "", 
+             "", "Anaerobiospirillum", "")
+  
+# Graph for top 10 genera
+p3log10<-ggplot(testLogDf, aes(plot_ID,log10_rel_abund, fill = REP_STATE))+theme_bw()+
+  geom_boxplot()+
+  scale_x_discrete(limits = limitsX,
+                   breaks = breaksX,
+                   labels = labelsX) +
+  xlab("")+ylab("log10 Relative Abundance")+
+  theme(axis.text.x  = element_text(size=11, color="black", angle=90, vjust = 0.6, hjust = 1, face = "italic"),
+        axis.text.y  = element_text(size=11, color="black"),
+        axis.title.x  = element_text(size=14, color="black"),
+        axis.title.y  = element_text(size=14, color="black"),
+        legend.title = element_blank(),
+        axis.ticks = element_blank()) +
+        scale_fill_manual(labels = c("Cycling", "Pregnant", "Nursing"),
+                            values = c("#999999", "#E69F00", "#56B4E9"));p3log10
+
+p3<-ggplot(long_rel_abun_top10_asvs, aes(plot_ID,rel_abund*100, fill = REP_STATE))+theme_bw()+
+  geom_boxplot()+
+  scale_x_discrete(limits = limitsX,
+                   breaks = breaksX,
+                   labels = labelsX) +
+  xlab("")+ylab("Relative Abundance (%)\n")+
+  theme(axis.text.x  = element_text(size=11, color="black", angle=90, vjust = 0.6, hjust = 1, face = "italic"),
+        axis.text.y  = element_text(size=11, color="black"),
+        axis.title.x  = element_text(size=14, color="black"),
+        axis.title.y  = element_text(size=14, color="black"),
+        legend.title = element_blank(),
+        axis.ticks = element_blank()) +
+        scale_fill_manual(labels = c("Cycling", "Pregnant", "Nursing"),
+                            values = c("#999999", "#E69F00", "#56B4E9"));p3
+```
+
+### Top phyla in community
+
+```{r top phyla}
+psGlomPhyla <-  tax_glom(ps, "Phylum", NArm = TRUE)
+psGlomPhyla
+
+GF_comm_phyla<-as.matrix(t(otu_table(psGlomPhyla, taxa_are_rows=FALSE))) #using agglomerated phyla
+dim(GF_comm_phyla) #12 312
+rel_abun_GF<-sweep(GF_comm_phyla, 2, apply(GF_comm_phyla,2,sum), `/`)
+dim(rel_abun_GF) #12 312
+apply(rel_abun_GF,2,sum)
+dim(rel_abun_GF)[1]->t
+apply(rel_abun_GF,1,sum)
+order(apply(rel_abun_GF,1,sum))[(t-9):t]
+top3_phyla_GF<-names(apply(rel_abun_GF,1,sum)[order(apply(rel_abun_GF,1,sum))[(t-9):t]])
+
+taxa[top3_phyla_GF,]->top3_phyla_GF
+row.names(top3_phyla_GF)<-c(length(row.names(top3_phyla_GF)):1)
+paste("phylum_",row.names(top3_phyla_GF),sep="")->row.names(top3_phyla_GF)
+top3_phyla_GF
+
+# Test for changes in relative abundance in dominant taxa
+rel_abun_top3_phyla<-rel_abun_GF[top3_phyla_GF,]
+row.names(rel_abun_top3_phyla)<-row.names(top3_phlya_GF)
+rel_abun_top3_phyla<-t(rel_abun_top3_phyla)
+rel_abun_top3_phyla<-as.data.frame(rel_abun_top3_phyla)
+rel_abun_top3_phyla$SAMPLE_ID<-row.names(rel_abun_top3_phyla)
+SSRF_Samples$REP_STATE[as.factor(row.names(rel_abun_top3_phyla))]->rel_abun_top3_phyla$REP_STATE
+long_rel_abun_top3_phyla<-tidyr::gather(rel_abun_top3_phyla, key=SAMPLE_ID, value=rel_abund, asv_3:asv_1)
+dim(long_rel_abun_top3_phyla)
+colnames(long_rel_abun_top3_phyla)[2]<-"asv_ID"
+long_rel_abun_top3_phyla$plot_ID<-paste(long_rel_abun_top3_phyla$asv_ID,long_rel_abun_top3_phyla$REP_STATE,sep="")
+
+top3df <- as.data.frame(top3_phlya_GF)
+top3df$asv_ID <- rownames(top3df)
+
+
+for (i in 1:10){
+  print(colnames(rel_abun_top3_phyla[i]))
+  print(kruskal.test(rel_abun_top3_phyla[,i] ~ REP_STATE, data=rel_abun_top3_phyla))
+  #print(dunnTest(rel_abun_top10_asvs[,i] ~ REP_STATE, data=rel_abun_top10_asvs, method="bh"))
+}
+
+limitsX <- c("asv_1Cycling", "asv_1Pregnant", "asv_1Nursing", "", 
+             "asv_2Cycling", "asv_2Pregnant", "asv_2Nursing", "",
+             "asv_3Cycling", "asv_3Pregnant", "asv_3Nursing")
+
+breaksX <- c("asv_1Cycling", "asv_1Pregnant", "asv_1Nursing", "", 
+             "asv_2Cycling", "asv_2Pregnant", "asv_2Nursing", "",
+             "asv_3Cycling", "asv_3Pregnant", "asv_3Nursing")
+
+p3<-ggplot(long_rel_abun_top3_phyla, aes(plot_ID,rel_abund*100, fill = REP_STATE))+theme_bw()+
+  geom_boxplot()+
+  scale_x_discrete(limits = limitsX,
+                   breaks = breaksX,
+                   labels = labelsX) +
+  xlab("")+ylab("Relative Abundance (%)")+
+  theme(axis.text.x  = element_text(size=11, color="black", angle=90, vjust = 0.6, hjust = 1),
+        axis.text.y  = element_text(size=11, color="black"),
+        axis.title.x  = element_text(size=14, color="black"),
+        axis.title.y  = element_text(size=14, color="black"),
+        legend.title = element_blank(),
+        axis.ticks = element_blank()) +
+        scale_fill_manual(labels = c("Cycling", "Pregnant", "Nursing"),
+                            values = c("#999999", "#E69F00", "#56B4E9"));p3
+```
+
+Plotting top 20 ASVs
+
+```{r}
+top20 <- names(sort(taxa_sums(ps), decreasing=TRUE))[1:20]
+ps.top20 <- transform_sample_counts(ps, function(OTU) OTU/sum(OTU))
+ps.top20 <- prune_taxa(top20, ps.top20)
+plot_bar(ps.top20, "Genus", fill="Phylum") +facet_wrap(~REP_STATE)
+```
+
+Plotting in a stacked bar chart.
+
+```{r}
+physeq3 <- transform_sample_counts(ps, function(x) x / sum(x) )
+physeq3 #330 taxa and 312 samples
+
+glom <- tax_glom(physeq3, taxrank = 'Phylum')
+glom # should list # taxa as # phyla : 20 taxa and 312 samples
+data_glom<- psmelt(glom) # create dataframe from phyloseq object
+data_glom$Phylum <- as.character(data_glom$Phylum) #convert to character
+
+#simple way to rename phyla with < 1% abundance
+data_glom$Phylum[data_glom$Abundance < 0.01] <- "< 1% abund."
+
+#Count # phyla to set color palette
+Count = length(unique(data_glom$Phylum))
+Count
+
+unique(data_glom$Phylum)
+
+spatial_plot <- ggplot(data=data_glom, aes(x=Sample, y=Abundance, fill=Phylum)) +
+                facet_grid(~REP_STATE, scales = "free")
+
+spatial_plot + 
+  geom_bar(aes(), stat="identity", position="stack") +
+  theme(legend.position="bottom") + guides(fill=guide_legend(nrow=5))
+```
+
+
+### Phyloseq to DESeq2 for differential abundance
+
+The function phyloseq_to_deseq2 converts  phyloseq-format microbiome data into a DESeqDataSet with dispersions estimated, using the experimental design formula, also shown (the ~REP_STATE term). Note: The default multiple-inference correction is Benjamini-Hochberg, and occurs within the DESeq function.
+
+#### Exploring differential abundance 
+
+Since we have a variable of interest with >2 levels, and since we are interested in specific changes between different reproductive states, we can use "contrasts" in DESeq2 to explore log fold changes. From the DESeq2 vignette:
+
+"A contrast is a linear combination of estimated log2 fold changes, which can be used to test if differences between groups are equal to zero. The simplest use case for contrasts is an experimental design containing a factor with three levels, say A, B and C. Contrasts enable the user to generate results for all 3 possible differences: log2 fold change of B vs A, of C vs A, and of C vs B. The contrast argument of results function is used to extract test results of log2 fold changes of interest."
+
+```{r}
+saveRDS(psGlom, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/agglomeratedPSobject22April2020.rds")
+write.csv(SSRF_Samples, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/SSRF_SamplesDF22April2020.csv")
+
+ps.dSeq <- phyloseq_to_deseq2(ps, ~REP_STATE) #using unagglomerated ps object which includes all taxa except for low prevalence phyla (controls are already filtered out)
+ps.dSeq <- estimateSizeFactors(ps.dSeq, geoMeans = apply(counts(ps.dSeq), 1, gm_mean)) #because we have many ASVs that do not appear in all samples, we have to use variance stabilized data to caluculate and visualize differential abundance 
+ps.dSeq <- estimateDispersions(ps.dSeq)
+ps.dSeq.vst <- getVarianceStabilizedData(ps.dSeq)
+dim(ps.dSeq.vst)
+
+psVST <- ps #psVST is now the phyloseq object with the variance transformed counts
+
+otu_table(psVST) <- otu_table(ps.dSeq.vst, taxa_are_rows = TRUE) # psVST variable now has the results of DESeq2 variance-stabilization of counts instead of the original counts.
+
+dds.ps <- DESeq(ps.dSeq, test="Wald", fitType = "parametric") 
+res <- results(dds.ps) #now we can create contrasts and look at other results in the results table 
+```
+
+##### Investigating results 
+
+```{r Preg vs Cyc}
+res <- results(dds.ps, contrast = c("REP_STATE", "Pregnant", "Cycling")) #no sig differences
+res <- res[order(res$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab <- res[(res$padj < alpha), ]
+sigtab <- cbind(as(sigtab, "data.frame"), as(tax_table(psVST)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+
+write.csv(sigtab, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPregVsCyc7April2020.csv")
+
+library("ggplot2")
+theme_set(theme_bw())
+sigtabgen = subset(sigtab, !is.na(Genus))
+# Phylum order
+x = tapply(sigtabgen$log2FoldChange, sigtabgen$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen$Phylum = factor(as.character(sigtabgen$Phylum), levels=names(x))
+# Genus order
+x = tapply(sigtabgen$log2FoldChange, sigtabgen$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen$Genus = factor(as.character(sigtabgen$Genus), levels=names(x))
+plot <- ggplot(sigtabgen, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
+  geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
+  geom_point(size=6) + 
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle("Pregnant versus Cycling")
+```
+
+```{r Preg vs nurse}
+res2 <- results(dds.ps, contrast = c("REP_STATE", "Pregnant", "Nursing")) #NOT significant
+res2 <- res2[order(res2$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab <- res2[(res2$padj < alpha), ]
+sigtab <- cbind(as(sigtab, "data.frame"), as(tax_table(psVST)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+
+write.csv(sigtab, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPregVsNurse.csv")
+
+library("ggplot2")
+theme_set(theme_bw())
+sigtabgen = subset(sigtab, !is.na(Genus))
+# Phylum order
+x = tapply(sigtabgen$log2FoldChange, sigtabgen$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen$Phylum = factor(as.character(sigtabgen$Phylum), levels=names(x))
+# Genus order
+x = tapply(sigtabgen$log2FoldChange, sigtabgen$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen$Genus = factor(as.character(sigtabgen$Genus), levels=names(x))
+plot2 <- ggplot(sigtabgen, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
+  geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
+  geom_point(size=6) + 
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle("Pregnant versus Nursing")
+```
+
+```{r Nurse vs Cyc}
+res3 <- results(dds.ps, contrast = c("REP_STATE", "Nursing", "Cycling")) #not signficant
+res3 <- res3[order(res3$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab <- res3[(res3$padj < alpha), ]
+sigtab <- cbind(as(sigtab, "data.frame"), as(tax_table(psVST)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+
+write.csv(sigtab, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurseVsCyc.csv")
+
+library("ggplot2")
+theme_set(theme_bw())
+sigtabgen = subset(sigtab, !is.na(Genus))
+# Phylum order
+x = tapply(sigtabgen$log2FoldChange, sigtabgen$Phylum, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen$Phylum = factor(as.character(sigtabgen$Phylum), levels=names(x))
+# Genus order
+x = tapply(sigtabgen$log2FoldChange, sigtabgen$Genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen$Genus = factor(as.character(sigtabgen$Genus), levels=names(x))
+plot3 <- ggplot(sigtabgen, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
+  geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
+  geom_point(size=6) + 
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5)) +
+  ggtitle("Nursing versus cycling")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+## PICRUST2 for Functional Inferences
+### Preparing files for PICRUST2
+ 
+Rename ASVs with short name, instead of full sequence
+
+```{r, eval=FALSE}
+rep_state_dna <- Biostrings::DNAStringSet(taxa_names(ps))
+names(rep_state_dna) <- taxa_names(ps)
+ps_repState_short <- merge_phyloseq(ps, rep_state_dna)
+taxa_names(ps_repState_short) <- paste0("ASV", seq(ntaxa(ps_repState_short)))
+ps_repState_short
+```
+
+Save fasta file from phyloseq object
+
+```{r, eval=FALSE}
+Biostrings::writeXStringSet(refseq(ps_repState_short), "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/PiCrust2_in/rep_state_seqs.fasta")
+```
+
+Save otu table as csv with taxa as rows
+
+```{r, eval=FALSE}
+# Extract abundance matrix from the phyloseq object
+rep_state_otu = as(otu_table(ps_repState_short), "matrix")
+# transpose if necessary
+rep_state_otu <- t(rep_state_otu)
+# Coerce to data.frame
+rep_state_otu_df = as.data.frame(rep_state_otu)
+write.table(rep_state_otu_df, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/PiCrust2_in/rep_state_otu.tsv", sep = "\t", quote = FALSE)
+```
+
+#### Preparing a .biom file
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("biomformat")
+```
+
+Trying to get an otu contingency table out of ps object. According to biomformat package: `make_biom(data, sample_metadata = NULL, observation_metadata = NULL, id = NULL, matrix_element_type = "int")` where data is a data.frame or matrix-class
+
+
+```{r}
+otuTab <- as.data.frame(otu_table(ps))
+otuTab <- t(otuTab)
+
+ps.b <- biomformat::make_biom(
+    data = otuTab,
+    sample_metadata = as.data.frame(phyloseq::sample_data(ps)),
+    observation_metadata = as.data.frame(phyloseq::tax_table(ps)), 
+    matrix_element_type = "int")
+
+write_biom(ps.b, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/PiCrust2_in/repState.biom")
+```
+
+
+
+
+
+
+
+
+
+
+

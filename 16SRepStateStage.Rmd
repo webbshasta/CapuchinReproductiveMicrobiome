@@ -1,0 +1,1091 @@
+---
+title: "PregStagesAnalysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Analysing microbiome change according to stage in pregnancy and lactation
+
+Here we will start with a seqtab.nochim object and a taxa object.
+
+### Handoff to Phyloseq package & saving otu table/taxa table for future use
+
+Read in seqtab.nochim and taxa if not already in your environment. 
+
+```{r}
+seqtab.nochim <- readRDS("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/seqtab.nochim.RDS"); rownames(seqtab.nochim)
+taxa <- readRDS("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/taxa.RDS")
+taxa.print <- taxa # Removing sequence rownames for display only
+rownames(taxa.print) <- NULL
+head(taxa.print)
+```
+
+Read in the metadata.
+
+```{r}
+metadataStage <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/Metadata/repStateStageMetaData22April.csv")
+as.data.frame(metadataStage)
+```
+
+```{r}
+metadataStage <- metadataStage %>% filter(SEX != "Male"); View(metadataStage) #168 samples including controls
+metadataStage <- metadataStage %>%
+                 arrange(., SAMPLE_ID)
+row.names(metadataStage) <- metadataStage$SAMPLE_ID #setting the row names for the metadata to be the sample ID
+```
+
+#### Matching metadata to sequence table
+
+```{r data cleaning}
+ControlsDF <- SSRmetadata %>% 
+              filter(., SampleOrControl == "Control") %>% #adding controls to the metadata file for the rep stage analysis
+              select(-X.2, -X.1) %>%
+              mutate(StartDate = NA, EndDate = NA, RepStateStage = NA)
+
+rownames(ControlsDF) <- ControlsDF$SAMPLE_ID #setting sampled ID to rownames
+stageTest <- rbind(metadataStage, ControlsDF) #joining the controls back into the metadata
+metadataStage <- stageTest #saving changes in metadata DF
+```
+
+Check to see if seqtab and metadata are equivalent.
+
+```{r}
+indToRemoveFromSeqtab <- setdiff(row.names(seqtab.nochim), metadataStage$SAMPLE_ID) ;indToRemoveFromSeqtab 
+indToRemoveFromMetadata <- setdiff(metadataStage$SAMPLE_ID, row.names(seqtab.nochim)) ;indToRemoveFromMetadata
+```
+
+Remove samples from seqtab that are not in the metadata. 
+
+```{r removing samples from seqtab}
+seqtab.nochim2 <-seqtab.nochim[!rownames(seqtab.nochim) %in% indToRemoveFromSeqtab, ] #; View(rownames(seqtab.nochim2)) #removing the samples in the list "remove"; 338 rows remain
+setdiff(row.names(seqtab.nochim2), metadataStage$SAMPLE_ID) #this should now return 0, since the objects now contain the same sample IDS
+seqtab.nochim <- seqtab.nochim2 #saving changes in the original seqtab object
+```
+
+Remove samples from metadata that are not in seqtab.
+
+```{r}
+metadataStage <- metadataStage %>%
+                       filter(., !(SAMPLE_ID %in% indToRemoveFromMetadata)) #; View(SSRFemalesMetaData2) #remove the females from the metadata
+                      
+setdiff(metadataStage$SAMPLE_ID, row.names(seqtab.nochim)) #confirm the metadata are now matching the seqtab
+row.names(metadataStage) <- metadataStage$SAMPLE_ID #159 samples, including controls
+```
+
+Removing positive controls (for time being).
+
+```{r remove positive controls}
+posControl <- c("PositivePC1", "PositivePC2", "PositivePC3", "substr369s1", "substr369s2", "substr476s")
+
+seqtab.nochim3 <-seqtab.nochim[!rownames(seqtab.nochim) %in% posControl, ] #; View(rownames(seqtab.nochim3))
+seqtab.nochim <- seqtab.nochim3
+posToRemove <- as.character(setdiff(metadataStage$SAMPLE_ID, row.names(seqtab.nochim3)))
+metadataStageNoPos <- metadataStage %>%
+                       filter(., !(SAMPLE_ID %in% posToRemove)) #; View(SSRFemalesMetaData3)
+
+rownames(metadataStageNoPos) <- metadataStageNoPos$SAMPLE_ID #155 samples, including neg controls
+```
+
+Creating a phyloseq object.
+
+```{r}
+psStage <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
+               sample_data(metadataStageNoPos), 
+               tax_table(taxa))
+psStage #18633 taxa and 155 samples
+
+otu_tableGF<-as.matrix(otu_table(seqtab.nochim, taxa_are_rows=FALSE))
+write.csv(otu_tableGF,"~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/otu_tableGFStage4May.csv")
+write.csv(taxa,"~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/taxaGFStage4May.csv")
+```
+
+## Microbial ecology: Getting main results
+
+### Obtaining basic stats to report in methods
+
+Choosing a treshold where you believe the sequence exists (5-20 repetitions across whole dataset?, some people like to also decide on how many different samples included that sequence)
+
+```{r filtering again}
+length(which(apply(seqtab.nochim,2,sum)<5)) #setting this to 5 reps across dataset for now
+seqtab.nochim.5<-seqtab.nochim[,-c(which(apply(seqtab.nochim,2,sum)<5))]
+psStage <- phyloseq(otu_table(seqtab.nochim.5, taxa_are_rows=FALSE), 
+               sample_data(metadataStageNoPos), 
+               tax_table(taxa), package = "decontam")
+psStage #5001 taxa and 155 samples 
+saveRDS(psStage, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/phyloseqObjectStage4May.RDS")
+```
+
+### Running decontam() on a ps object
+
+#### Inspecting library sizes
+
+Be sure your metadata sheet has a column that identifies the sample as control or sample.
+
+```{r}
+head(sample_data(psStage))
+df <- as.data.frame(sample_data(psStage)) # Put sample_data into a ggplot-friendly data.frame
+df$LibrarySize <- sample_sums(psStage)
+df <- df[order(df$LibrarySize),]
+df$Index <- seq(nrow(df))
+ggplot(data=df, aes(x=Index, y=LibrarySize, color=SampleOrControl)) + geom_point()
+saveRDS(df, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/sampleDataDFStage22April.RDS")
+
+```
+
+#### Identify contaminants - prevalence
+
+In this contaminant identification method we’ll use the “prevalence” method. In this method, the prevalence (presence/absence across samples) of each sequence feature in true positive samples is compared to the prevalence in negative controls to identify contaminants.
+
+```{r}
+sample_data(psStage)$is.neg <- sample_data(psStage)$SampleOrControl == "Control" #creating a column that displays a logical response to if smaple is control or true sample
+
+contamdf.prev <- isContaminant(psStage, method="prevalence", neg="is.neg") #running the function to test if seqs are contaminants or not
+table(contamdf.prev$contaminant)
+head(which(contamdf.prev$contaminant))
+
+contamdf.prev05 <- isContaminant(psStage, method="prevalence", neg="is.neg", threshold=0.5) #altering the default threshold
+
+table(contamdf.prev05$contaminant)
+```
+
+Let’s take a look at the number of times several of these taxa were observed in negative controls and positive samples.
+
+```{r}
+# Make phyloseq object of presence-absence in negative controls and true samples
+ps.pa <- transform_sample_counts(psStage, function(abund) 1*(abund>0))
+ps.pa.neg <- prune_samples(sample_data(ps.pa)$SampleOrControl == "Control", ps.pa)
+ps.pa.pos <- prune_samples(sample_data(ps.pa)$SampleOrControl == "Sample", ps.pa)
+
+# Make data.frame of prevalence in positive and negative samples
+df.pa <- data.frame(pa.pos=taxa_sums(ps.pa.pos), pa.neg=taxa_sums(ps.pa.neg),
+                      contaminant=contamdf.prev05$contaminant)
+ggplot(data=df.pa, aes(x=pa.neg, y=pa.pos, color=contaminant)) + geom_point() +
+  xlab("Prevalence (Negative Controls)") + ylab("Prevalence (True Samples)")
+```
+
+Samples seem to split pretty cleanly into a branch that shows up mostly in positive samples, and another that shows up mostly in negative controls, and the contaminant assignment has done a good job of identifying those mostly in negative controls.
+
+Removing contaminants from the phyloseq object.
+
+```{r}
+contamdf.prev05$contamSeq <- rownames(contamdf.prev05) #making the rownames (the sequences) their own column
+#contamdf.prev05$contamSeq <- This should now be your contaminant sequences
+
+toKeepdf <- contamdf.prev05 %>% filter(contaminant == "FALSE") #creating a subset dataframe with only the seqs we want to keep (non-contaminants)
+toKeepList <- toKeepdf$contamSeq #creating a character vector of those non-contam seqs
+psStage <- prune_taxa(toKeepList, psStage) #removing contaminant taxa 
+psStage #4993 taxa and 155 samples
+```
+
+Let's rerun the contamination detection step to see if it worked.
+
+```{r}
+sample_data(psStage)$is.neg <- sample_data(psStage)$SampleOrControl == "Control"
+contamdf.prev05 <- isContaminant(psStage, method="prevalence", neg="is.neg", threshold=0.5) #altering the default threshold
+table(contamdf.prev05$contaminant) #It has detected no more contaminants
+```
+
+### Pruning controls from the phyloseq object
+
+```{r}
+samplesKeep <- prune_samples(sample_data(psStage)$SampleOrControl == "Sample", psStage) #removing all but true samples, since controls were already used to decontaminate
+psStage <- samplesKeep #once we know the samples were pruned, we can save that in our main ps object; note that we now have 335 samples, all of which are from female monkeys
+psStage #4993 taxa and 143 samples
+```
+
+### Removing samples with very few reads
+
+Now that we have decontaminated the samples, and filtered so that we now only have female monkeys, let's check to see if any very low read samples remain. 
+
+```{r}
+which(!rowSums(otu_table(psStage)) > 1000) #this returns the samples that have fewer than 1000 reads
+```
+
+Let's remove any samples with fewer than 1000 reads from the ps object.
+
+```{r}
+toRemove <- c("JA15145-060M", "JA15145-070M", "JA15145-071M", "416-Lunalovegood")
+psKeep <- prune_samples(!sample_data(psStage)$SAMPLE_ID %in% toRemove, psStage)
+psStage <- psKeep; psStage #4993 taxa and 139 samples
+```
+
+Let's now remove these same samples from the metadata object, as well as subset it to be samples only
+
+```{r}
+metadataStageFilt <- metadataStageNoPos %>% filter(!SAMPLE_ID %in% toRemove)
+metadataStageFilt <- metadataStageFilt %>% filter(SampleOrControl == "Sample")
+rownames(metadataStageFilt) <- metadataStageFilt$SAMPLE_ID #139 samples
+```
+
+### Removing uncharacterized phyla
+
+```{r}
+psStage <- subset_taxa(psStage, !is.na(Phylum) & !Phylum %in% c("", "uncharacterized"))
+psStage #4974 taxa and 139 samples
+```
+
+### Removing mitochondria and chloroplasts
+
+```{r}
+psStage <- subset_taxa(psStage, !is.na(Class) & !Class %in% c("Chloroplast")) 
+psStage #4930 taxa and 139 samples
+
+psStage <- subset_taxa(psStage, !is.na(Family) & !Family %in% c("Mitochondria")) 
+psStage #4268 taxa and 139 samples
+```
+
+A useful next step is to explore feature prevalence in the dataset, which we will define here as the number of samples in which a taxa appears at least once. (from f1000 paper)
+
+```{r}
+# Compute prevalence of each feature, store as data.frame
+prevdf <- apply(X = otu_table(psStage),
+                 MARGIN = ifelse(taxa_are_rows(psStage), yes = 1, no = 2),
+                 FUN = function(x){sum(x > 0)})
+# Add taxonomy and total read counts to this data.frame
+prevdf <- data.frame(Prevalence = prevdf,
+                      TotalAbundance = taxa_sums(psStage),
+                      tax_table(psStage))
+```
+
+Are there phyla that are comprised of mostly low-prevalence features? Compute the total and average prevalences of the features in each phylum.
+
+```{r}
+plyr::ddply(prevdf, "Phylum", function(df1){cbind(mean(df1$Prevalence),sum(df1$Prevalence))})
+```
+
+```{r}
+# Define phyla to filter
+filterPhyla = c("Deferribacteres", "Dependentiae", "Entotheonellaeota", "Euryarchaeota", "Fibrobacteres", "Lentisphaerae", "Synergistetes", "Tenericutes")
+
+# Filter entries with unidentified Phylum.
+ps1 <- subset_taxa(psStage, !Phylum %in% filterPhyla)
+ps1 #4244 taxa and 139 samples
+psStage <- ps1
+```
+
+Prevalence Filtering
+
+```{r}
+# Subset to the remaining phyla
+prevdf1 <- subset(prevdf, Phylum %in% get_taxa_unique(psStage, "Phylum"))
+ggplot(prevdf1, aes(TotalAbundance, Prevalence / nsamples(psStage),color=Phylum)) +
+  # Include a guess for parameter
+    geom_hline(yintercept = 0.05, alpha = 0.5, linetype = 2) + 
+    geom_point(size = 2, alpha = 0.7) +
+    scale_x_log10() +
+    xlab("Total Abundance") + 
+    ylab("Prevalence [Frac. Samples]") +
+    facet_wrap(~Phylum) + 
+    theme(legend.position="none")
+```
+
+```{r}
+#  Define prevalence threshold as 5% of total samples
+prevalenceThreshold <- 0.05 * nsamples(psStage)
+prevalenceThreshold
+
+# Execute prevalence filter, using `prune_taxa()` function
+keepTaxa <- rownames(prevdf1)[(prevdf1$Prevalence >= prevalenceThreshold)]
+ps2 <- prune_taxa(keepTaxa, psStage)
+ps2 #343 taxa and 139 samples
+psStage <- ps2
+saveRDS(psStage, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/psObjectCleanStage4May.RDS")
+```
+
+### Agglomerate taxa
+
+When there is known to be a lot of species or sub-species functional redundancy in a microbial community, it might be useful to agglomerate the data features corresponding to closely related taxa. Ideally we would know the functional redundancies perfectly ahead of time, in which case we would agglomerate taxa using those defined relationships and the merge_taxa() function in phyloseq. That kind of exquisite functional data is usually not available, and different pairs of microbes will have different sets of overlapping functions, complicating the matter of defining appropriate grouping criteria.
+
+```{r}
+# How many genera would be present after filtering?
+length(get_taxa_unique(psStage, taxonomic.rank = "Genus"))
+
+## [1] 148 genera
+
+psGlomStage <- tax_glom(psStage, "Genus", NArm = TRUE)
+psGlomStage #147 taxa and 139 samples
+```
+
+### Tailoring to different research questions
+
+Abundance value transformation
+
+It is usually necessary to transform microbiome count data to account for differences in library size, variance, scale, etc. The phyloseq package provides a flexible interface for defining new functions to accomplish these transformations of the abundance values via the transform_sample_counts() function. The first argument to this function is the phyloseq object you want to transform, and the second argument is an R function that defines the transformation. The R function is applied sample-wise, expecting that the first unnamed argument is a vector of taxa counts in the same order as the phyloseq object. Additional arguments are passed on to the function specified in the second argument, providing an explicit means to include pre-computed values, previously defined parameters/thresholds, or any other object that might be appropriate for computing the transformed values of interest.
+
+#### Function for plotting abundance according to reproductive state stage
+
+```{r}
+plot_abundance_Stage <- function(physeq,title = "",
+			     Facet = "Order", Color = "Phylum"){
+  # Arbitrary subset, based on Phylum, for plotting
+  p1f <- subset_taxa(physeq, Phylum %in% c("Firmicutes"))
+  mphyseq <- psmelt(p1f)
+  mphyseq <- subset(mphyseq, Abundance > 0)
+  ggplot(data = mphyseq, mapping = aes_string(x = "RepStateStage",y = "Abundance",
+                                 color = Color, fill = Color)) +
+    geom_violin(fill = NA) +
+    geom_point(size = 1, alpha = 0.3,
+                position = position_jitter(width = 0.3)) +
+    facet_wrap(facets = Facet) + scale_y_log10()+
+    theme(legend.position="none")
+}
+```
+
+#### Plotting abundance according to reproductive state
+
+```{r}
+# Transform to relative abundance. Save as new object.
+
+psGlomRa <- transform_sample_counts(psGlomStage, function(x){x / sum(x)})
+
+#ord.NMDS.bray <- ordinate(ps3ra, method = "NMDS", distance = "bray")
+#plot_ordination(ps3ra, ord.NMDS.bray, color = "REP_STATE")
+
+plotBefore <- plot_abundance_Stage(psGlomStage,"")
+plotAfter <- plot_abundance_Stage(psGlomRa,"")
+# Combine each plot into one graphic.
+grid.arrange(nrow = 2, plotBefore, plotAfter)
+```
+
+### Beta-diversity (aka community structure/composition)
+
+*PERMANOVA with adonis function
+What is the model we want to test?
+Many models can be statistically accurate/robust but few are biologically relevant.
+Make sure to base your model on biologically relevant question.
+Option with repeated measures from many individuals (time-series)
+
+```{r betadiv}
+# Create function geo means for Variance Stabilizing Transformation
+gm_mean <- function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
+
+# Variance Stabilizing Transformation (REP_STATE)
+test.phyloseq.dds<-phyloseq_to_deseq2(psStage,~RepStateStage)
+test.phyloseq.dds <- estimateSizeFactors(test.phyloseq.dds, geoMeans = apply(counts(test.phyloseq.dds), 1, gm_mean))
+vst.blind <- DESeq2::varianceStabilizingTransformation(test.phyloseq.dds, blind=TRUE)
+vst.blind.Mat <- SummarizedExperiment::assay(vst.blind) # Extract transformed OTU table
+vst.blind.Mat<-t(vst.blind.Mat)
+vst.blind.Mat[which(vst.blind.Mat<0)]<-0
+dists <- dist(t(assay(vst.blind)))
+
+# Computing Bray-Curtis Dissimilarities and PCoA
+comm.vst.blind.Mat <- vegdist(vst.blind.Mat, "bray")
+PCoA.comm.vst.blind.Mat<-capscale(comm.vst.blind.Mat~1,distance="bray")
+PCoA.comm.vst.blind.Mat$CA$eig[1:3]/sum(PCoA.comm.vst.blind.Mat$CA$eig)
+PCoA.comm.vst.blind.Mat #this will re-order rownames to be alphabetic, which is not the way they are in the metadata csv. you will need to ensure the metadata file and this object have the same rownames before proceedingto plotting or linear models
+eig <- PCoA.comm.vst.blind.Mat$CA$eig
+
+# Portion of total vraiation in community structure explained by each of the main three components
+eig[1]/sum(abs(eig)) #
+eig[2]/sum(abs(eig)) #
+eig[3]/sum(abs(eig)) #
+
+# Save scores in dataset tables
+mdTest <- metadataStageFilt %>% #ensure that the df is ordered by SAMPLE_ID
+          arrange(SAMPLE_ID)
+metadataStageFilt <- mdTest
+
+row.names(metadataStageFilt)<-row.names(scores(PCoA.comm.vst.blind.Mat)$sites) 
+metadataStageFilt$PCoA1<-scores(PCoA.comm.vst.blind.Mat)$sites[,1]
+metadataStageFilt$PCoA2<-scores(PCoA.comm.vst.blind.Mat)$sites[,2]
+
+# PERMANOVA
+permanovaMulti<-adonis(comm.vst.blind.Mat ~ RepStateStage + dietType + MONTH + INDIVIDUAL + Rainfall, data=metadataStageFilt, permutations = 2000)
+permanovaMulti$aov.tab
+```
+
+### PCoA with ggplot2
+
+Let's visualize beta-diversity in a figure using PCoA with Bray-Curtis distances. 
+
+```{r}
+summary(metadataStageFilt)
+
+metadataStageFilt$RepStateStage <- factor(metadataStageFilt$RepStateStage, levels = c("PregnancyStage1", "PregnancyStage2", "PregnancyStage3", "NursingStage1", "NursingStage2", "NursingStage3")) #changing the order of the levels of rep stage from alphabetical to the order we want them in the plots
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "grey42") #colorblind friendly palette
+
+betaDivPCoAStage <- ggplot(metadataStageFilt, aes(PCoA1, PCoA2, color = RepStateStage)) +
+                    geom_point(size = 3) +
+                    labs(x = "\nPCoA1 [20.2% variance]", y = "PCoA2 [8.42% variance]\n") +
+                    scale_color_manual(name = NULL, labels = c("Pregnancy Stage 1: 0-53 days", "Pregnancy Stage 2: 54-104 days", "Pregnancy Stage 3: 105-158 days", "Nursing Stage 1: 0-121 days", "Nursing Stage 2: 122-242 days", "Nursing Stage 3: 243-365 days"), values = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2")) +
+                    #scale_fill_discrete(labels = c("Pregnancy Stage 1: 0-52 days", "Pregnancy Stage 2: 53-104 days", "Pregnancy Stage 3: 105-157 days", "Nursing Stage 1: 0-121 days", "Nursing Stage 2: 122-242 days", "Nursing Stage 3: 243-365 days"))#filling in the rep stages with cb friendly colors
+                    theme_bw() + #removing the gray grid in the background
+                    stat_ellipse() +
+                    theme(text = element_text(size = 14))
+
+betaDivIndStage <- betaDivPCoAStage +
+                   facet_wrap(~INDIVIDUAL)
+```
+
+### Alpha-diversity (Shannon) vs. species richness (Chao1)
+
+*CHAO1
+
+```{r computation}
+adiv<-estimate_richness(psStage,measures=c("Observed","Shannon","Chao1"))
+metadataStageFilt$alphadiv<-adiv$Shannon
+hist(metadataStageFilt$alphadiv)
+metadataStageFilt$chao1<-adiv$Chao1
+hist(metadataStageFilt$chao1)
+metadataStageFilt$evenness<-adiv$Shannon/log(adiv$Observed)
+
+write.csv(metadataStageFilt, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/metadataStageFilt4May.csv")
+```
+
+Boxplots with ggplot2
+
+```{r boxplots}
+p<-ggplot(metadataStageFilt, aes(RepStateStage, chao1,fill=RepStateStage)) +
+  theme_bw() +
+  geom_boxplot(alpha=0.6)+
+  scale_fill_manual(values = cbPalette) +
+  xlab("") + ylab("Species Richness\n(Chao1)\n") +
+  guides(fill=F,color=F) +
+  scale_x_discrete(labels = c("","","","","","")) +
+  theme(axis.ticks.x = element_blank());p
+
+p2<-ggplot(metadataStageFilt, aes(RepStateStage, alphadiv,fill=RepStateStage)) +
+  theme_bw() +
+  geom_boxplot(alpha=0.6) +#geom_jitter(width=0.1) +
+  scale_fill_manual(values = cbPalette) +
+  xlab("") + ylab("Alpha Diversity\n(Shannon Index)\n") +
+  scale_x_discrete(labels = c("Pregnancy Stage 1", "Pregnancy Stage 2", "Pregnancy Stage 3", "Nursing Stage 1", "Nursing Stage 2", "Nursing Stage 3")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.ticks.x = element_blank()) +
+  guides(fill=F,color=F);p2
+
+library(gtable); library(grid); library(gridExtra)
+g1 <- ggplotGrob(p)
+g2 <- ggplotGrob(p2)
+g <- rbind(g1, g2, size = "first")
+g$widths <- unit.pmax(g1$widths, g2$widths)
+grid.newpage()
+grid.draw(g)
+```
+
+### Significant differences between groups/rep states
+
+Linear models, anovas, & Post-hoc tests
+
+```{r linear model}
+# Chao1
+summary(fm1<-aov(log(chao1)~RepStateStage, data=metadataStageFilt))
+post_oc<-TukeyHSD(fm1, "RepStateStage", ordered=FALSE); post_oc
+
+#Shannon
+summary(fm1<-aov(log(alphadiv)~RepStateStage, data=metadataStageFilt))
+post_oc<-TukeyHSD(fm1, "RepStateStage", ordered=FALSE); post_oc
+```
+
+Non-parametric tests & Post-hoc tests
+
+```{r non-para}
+# Chao1
+kruskal.test(chao1~RepStateStage, data=metadataStageFilt)
+#dunnTest(data=SSRFemalesMetaData,chao1~REP_STATE, method="bh")
+
+# Shannon
+kruskal.test(alphadiv~RepStateStage, data=metadataStageFilt)
+#dunnTest(data=SSRFemalesMetaData,alphadiv~REP_STATE, method="bh")
+```
+
+Linear-mixed models
+
+```{r linear mixed model}
+# Chao1
+fit_chao1 <- lmer(chao1~ RepStateStage + (1 | INDIVIDUAL),data=metadataStageFilt)
+anova(fit_chao1)
+
+# Shannon
+fit_shannon <- lmer(alphadiv~ RepStateStage + (1 | INDIVIDUAL),data=metadataStageFilt)
+anova(fit_shannon,ddf="lme4",test="F")
+```
+
+### Phyloseq to DESeq2 for differential abundance
+
+The function phyloseq_to_deseq2 converts  phyloseq-format microbiome data into a DESeqDataSet with dispersions estimated, using the experimental design formula, also shown (the ~REP_STATE term). Note: The default multiple-inference correction is Benjamini-Hochberg, and occurs within the DESeq function.
+
+#### Exploring differential abundance 
+
+Since we have a variable of interest with >2 levels, and since we are interested in specific changes between different reproductive states, we can use "contrasts" in DESeq2 to explore log fold changes. From the DESeq2 vignette:
+
+"A contrast is a linear combination of estimated log2 fold changes, which can be used to test if differences between groups are equal to zero. The simplest use case for contrasts is an experimental design containing a factor with three levels, say A, B and C. Contrasts enable the user to generate results for all 3 possible differences: log2 fold change of B vs A, of C vs A, and of C vs B. The contrast argument of results function is used to extract test results of log2 fold changes of interest."
+
+```{r}
+ps.dSeq <- phyloseq_to_deseq2(psStage, ~RepStateStage) #using unagglomerated ps1 object which includes all taxa except for low prevalence phyla (controls are already filtered out)
+ps.dSeq <- estimateSizeFactors(ps.dSeq, geoMeans = apply(counts(ps.dSeq), 1, gm_mean)) #because we have many ASVs that do not appear in all samples, we have to use variance stabilized data to caluculate and visualize differential abundance 
+ps.dSeq <- estimateDispersions(ps.dSeq)
+ps.dSeq.vst <- getVarianceStabilizedData(ps.dSeq)
+dim(ps.dSeq.vst)
+
+psVST <- psStage #psVST is now the phyloseq object with the variance transformed counts
+saveRDS(psVST, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/psVSTstage4May.RDS")
+
+otu_table(psVST) <- otu_table(ps.dSeq.vst, taxa_are_rows = TRUE) # psVST variable now has the results of DESeq2 variance-stabilization of counts instead of the original counts.
+
+dds.ps <- DESeq(ps.dSeq, test="Wald", fitType = "parametric") 
+res <- results(dds.ps) #now we can create contrasts and look at other results in the results table 
+```
+
+##### Investigating results 
+
+Differential abundance in genera when PregnancyStage2 is compared to PregnancyStage1
+
+Load required packages:
+
+```{r}
+library(ggplot2); library(gtable); library(grid); library(gridExtra)
+```
+
+
+```{r Preg1 vs Preg2}
+res1 <- results(dds.ps, contrast = c("RepStateStage", "PregnancyStage2", "PregnancyStage1")) 
+res1 <- res1[order(res1$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab1 <- res1[(res1$padj < alpha), ]
+sigtab1 <- cbind(as(sigtab1, "data.frame"), as(tax_table(psVST)[rownames(sigtab1), ], "matrix"))
+head(sigtab1)
+
+write.csv(sigtab1, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPreg2vPreg1_22April2020.csv")
+sigtab1 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPreg2vPreg1_22April2020.csv")
+
+sigtabgen1 <- subset(sigtab1, !is.na(Genus))
+# Phylum order
+x <- tapply(sigtabgen1$log2FoldChange, sigtabgen1$Phylum, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen1$Phylum <- factor(as.character(sigtabgen1$Phylum), levels=names(x))
+# Genus order
+x <- tapply(sigtabgen1$log2FoldChange, sigtabgen1$Genus, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen1$Genus <- factor(as.character(sigtabgen1$Genus), levels=names(x))
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "grey42")
+cols <- c("Firmicutes" = "#999999", "Actinobacteria" = "#E69F00", "Proteobacteria" = "#56B4E9")
+plot1 <- ggplot(sigtabgen1, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
+                geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
+                geom_point(size=3) + 
+                xlim(-35, 35) +
+                scale_color_manual(values = cols) +
+                theme_bw() +
+                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5), 
+                      axis.text.y = element_text(face = "italic")) +
+                ggtitle("Pregnancy Stage 1 to Pregnancy Stage 2") +
+                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5)); plot1
+```
+
+Differential abundance in genera when PregnancyStage3 is compared to PregnancyStage2
+
+```{r Preg2 vs Preg3}
+res2 <- results(dds.ps, contrast = c("RepStateStage", "PregnancyStage3", "PregnancyStage2"))
+res2 <- res2[order(res2$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab2 <- res2[(res2$padj < alpha), ]
+sigtab2 <- cbind(as(sigtab2, "data.frame"), as(tax_table(psVST)[rownames(sigtab2), ], "matrix"))
+head(sigtab2)
+
+write.csv(sigtab2, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPreg3vPreg2_22April2020.csv")
+sigtab2 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPreg3vPreg2_22April2020.csv")
+
+sigtabgen2 <- subset(sigtab2, !is.na(Genus))
+# Phylum order
+x <- tapply(sigtabgen2$log2FoldChange, sigtabgen2$Phylum, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen2$Phylum <- factor(as.character(sigtabgen2$Phylum), levels=names(x))
+# Genus order
+x <- tapply(sigtabgen2$log2FoldChange, sigtabgen2$Genus, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen2$Genus <- factor(as.character(sigtabgen2$Genus), levels=names(x))
+
+cols <- c("Firmicutes" = "#999999", "Actinobacteria" = "#E69F00", "Proteobacteria" = "#56B4E9", "Bacteroidetes" = "#009E73")
+plot2 <- ggplot(sigtabgen2, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
+                geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
+                geom_point(size=3) + 
+                xlim(-35, 35) +
+                scale_color_manual(values = cols) +
+                theme_bw() +
+                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5),
+                      axis.text.y = element_text(face = "italic")) +
+                ggtitle("Pregnancy Stage 2 to Pregnancy Stage 3") +
+                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5)); plot2
+
+```
+
+Differential abundance in genera when NursingStage1 is compared to PregnancyStage3
+
+```{r Preg3 vs Nurse1}
+res3 <- results(dds.ps, contrast = c("RepStateStage", "NursingStage1", "PregnancyStage3")) 
+res3 <- res3[order(res3$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab3 <- res3[(res3$padj < alpha), ]
+sigtab3 <- cbind(as(sigtab3, "data.frame"), as(tax_table(psVST)[rownames(sigtab3), ], "matrix"))
+head(sigtab3)
+
+write.csv(sigtab3, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse1vPreg3_22April2020.csv")
+sigtab3 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse1vPreg3_22April2020.csv")
+
+sigtabgen3 <- subset(sigtab3, !is.na(Genus))
+# Phylum order
+x <- tapply(sigtabgen3$log2FoldChange, sigtabgen3$Phylum, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen3$Phylum <- factor(as.character(sigtabgen3$Phylum), levels=names(x))
+# Genus order
+x <- tapply(sigtabgen3$log2FoldChange, sigtabgen3$Genus, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen3$Genus <- factor(as.character(sigtabgen3$Genus), levels=names(x))
+
+cols <- c("Firmicutes" = "#999999", "Actinobacteria" = "#E69F00", "Proteobacteria" = "#56B4E9", "Bacteroidetes" = "#009E73")
+plot3 <- ggplot(sigtabgen3, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
+                geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
+                geom_point(size=3) + 
+                xlim(-35, 35) +
+                scale_color_manual(values = cols) +
+                theme_bw() +
+                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5),
+                      axis.text.y = element_text(face = "italic")) +
+                ggtitle("Pregnancy Stage 3 to Nursing Stage 1") +
+                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5)); plot3
+```
+
+Differential abundance in genera when NursingStage2 is compared to NursingStage1
+
+```{r Nurse1 vs Nurse2}
+res4 <- results(dds.ps, contrast = c("RepStateStage", "NursingStage2", "NursingStage1")) #no sig differences
+res4 <- res4[order(res4$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab4 <- res4[(res4$padj < alpha), ]
+sigtab4 <- cbind(as(sigtab4, "data.frame"), as(tax_table(psVST)[rownames(sigtab4), ], "matrix"))
+head(sigtab4)
+
+write.csv(sigtab4, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse2vNurse1_22April2020.csv")
+sigtab4 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse2vNurse1_22April2020.csv")
+
+sigtabgen4 <- subset(sigtab4, !is.na(Genus))
+# Phylum order
+x <- tapply(sigtabgen4$log2FoldChange, sigtabgen4$Phylum, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen4$Phylum = factor(as.character(sigtabgen4$Phylum), levels=names(x))
+# Genus order
+x <- tapply(sigtabgen4$log2FoldChange, sigtabgen4$Genus, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen4$Genus = factor(as.character(sigtabgen4$Genus), levels=names(x))
+
+cols <- c("Firmicutes" = "#999999", "Actinobacteria" = "#E69F00", "Proteobacteria" = "#56B4E9", "Bacteroidetes" = "#009E73")
+
+plot4 <- ggplot(sigtabgen4, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
+                geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
+                geom_point(size=3) +
+                xlim(-35, 35) +
+                scale_color_manual(values = cols) +
+                theme_bw() +
+                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5),
+                     axis.text.y = element_text(face = "italic")) +
+                ggtitle("Nursing Stage 1 to Nursing Stage 2") +
+                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5)); plot4
+```
+
+Differential abundance in genera when NursingStage3 is compared to NursingStage1
+
+```{r Nurse2 vs Nurse3}
+res5 <- results(dds.ps, contrast = c("RepStateStage", "NursingStage3", "NursingStage2")) 
+res5 <- res5[order(res5$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab5 <- res5[(res5$padj < alpha), ]
+sigtab5 <- cbind(as(sigtab5, "data.frame"), as(tax_table(psVST)[rownames(sigtab5), ], "matrix"))
+head(sigtab5)
+
+write.csv(sigtab5, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse3vNurse2_22April2020.csv")
+sigtab5 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse3vNurse2_22April2020.csv")
+
+sigtabgen5 <- subset(sigtab5, !is.na(Genus))
+# Phylum order
+x <- tapply(sigtabgen5$log2FoldChange, sigtabgen5$Phylum, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen5$Phylum = factor(as.character(sigtabgen5$Phylum), levels=names(x))
+# Genus order
+x <- tapply(sigtabgen5$log2FoldChange, sigtabgen5$Genus, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen5$Genus <- factor(as.character(sigtabgen5$Genus), levels=names(x))
+
+plot5 <- ggplot(sigtabgen5, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
+                geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
+                geom_point(size=3) +
+                xlim(-35, 35) +
+                scale_color_manual(values = cols) +
+                theme_bw() +
+                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5),
+                      axis.text.y = element_text(face = "italic")) +
+                ggtitle("Nursing Stage 2 to Nursing Stage 3") +
+                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5)); plot5
+
+```
+
+Creating a combined figure with 5 plots
+
+```{r}
+library(gtable)
+g1 <- ggplotGrob(plot1 + theme(legend.position = "none") + ylab(NULL) + xlab(NULL))
+g2 <- ggplotGrob(plot2 + theme(legend.position = "none") + ylab(NULL) + xlab(NULL))
+g3 <- ggplotGrob(plot3 + theme(legend.position = "none") + ylab(NULL) + xlab(NULL))
+g4 <- ggplotGrob(plot4 + theme(legend.position = "none") + ylab(NULL) + xlab(NULL))
+g5 <- ggplotGrob(plot5 + theme(legend.position = "bottom") + theme(legend.title = element_blank()) + ylab(NULL))
+g <- rbind(g1, g2, g3, g4, g5, size = "first")
+g$widths <- unit.pmax(g1$widths, g2$widths, g3$widths, g4$widths, g5$widths)
+grid.newpage()
+grid.draw(g)
+```
+
+Creating a results DF 
+
+```{r}
+p2vp1 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPreg2vPreg1_22April2020.csv")
+p2vp1 <- p2vp1 %>%
+         mutate(Comparison = "PregnancyStage2_versus_PregnancyStage3")
+
+p3vp2 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPreg3vPreg2_22April2020.csv")
+p3vp2 <- p3vp2 %>%
+         mutate(Comparison = "PregnancyStage3_versus_PregnancyStage2")
+
+n1vp3 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse1vPreg3_22April2020.csv")
+n1vp3 <- n1vp3 %>%
+         mutate(Comparison = "NursingStage1_versus_PregnancyStage3")
+
+n2vn1 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse2vNurse1_22April2020.csv")
+n2vn1 <- n2vn1 %>%
+         mutate(Comparison = "NursingStage2_versus_NursingStage1")
+
+n3vn2 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse3vNurse2_22April2020.csv")
+n3vn2 <- n3vn2 %>%
+         mutate(Comparison = "NursingStage3_versus_NursingStage1")
+
+diffAbundRes <- rbind(p2vp1,p3vp2,n1vp3,n2vn1,n3vn2)
+write.csv(diffAbundRes, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/diffAbundConcatResults22April.csv")
+```
+
+### Creating a figure tracking abundance over the course of pregnancy and nursing
+
+Reading in psStage object and metadataStageFilt
+
+```{r}
+psVST <- readRDS("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/psVSTstage4May.RDS") #read in the variance stabilized counts object
+metadataStageFilt <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/metadataStageFilt4May.csv") #read in filt metadata
+```
+
+We will use agglomerated data for the figure
+
+```{r}
+# How many genera would be present after filtering?
+length(get_taxa_unique(psStage, taxonomic.rank = "Genus"))
+
+## [1] 148 genera
+
+psGlomStage <- tax_glom(psStage, "Genus", NArm = TRUE)
+psGlomStage #147 taxa and 139 samples
+```
+
+```{r}
+GF_comm<-as.matrix(t(otu_table(psGlomStage, taxa_are_rows=FALSE))) #using agglomerated taxa
+dim(GF_comm) #147 139
+rel_abun_GF<-sweep(GF_comm, 2, apply(GF_comm,2,sum), `/`)
+dim(rel_abun_GF) #147 139
+apply(rel_abun_GF,2,sum)
+dim(rel_abun_GF)[1]->t
+apply(rel_abun_GF,1,sum)
+order(apply(rel_abun_GF,1,sum))
+order(apply(rel_abun_GF,1,sum))[length(t):t]
+asvsStage<-names(apply(rel_abun_GF,1,sum)[order(apply(rel_abun_GF,1,sum))])
+asvsStage<-names(apply(rel_abun_GF,1,sum)[order(apply(rel_abun_GF,1,sum))[length(t):t]])
+
+taxa[asvsStage,]->asvsStage
+row.names(asvsStage)<-c(length(row.names(asvsStage)):1)
+paste("asv_",row.names(asvsStage),sep="")->row.names(asvsStage)
+asvsStage
+asvsStage_df <- as.data.frame(asvsStage)
+
+asvsStage_df <- asvsStage_df[rev(rownames(asvsStage_df)), ] #reversing the order
+rownames(rel_abun_GF) <- asvsStage_df$Genus #setting rownames to the genus
+rel_abun_t<-t(rel_abun_GF) #transposing the df so that each sample is a row, each column is a genus, and values are the rel abundance of each genus
+rel_abun_RepStage<-as.data.frame(rel_abun_t)
+
+rel_abun_RepStage$SAMPLE_ID<-row.names(rel_abun_RepStage) #adding a column for sample id so we can join rep state stage to the df
+
+#left joining rep state stage to rel abund table
+
+df_sampleid_repstatestage <- metadataStageFilt %>%
+                             dplyr::select(., SAMPLE_ID, RepStateStage) #filtering the metadata to just include sample id and rep state stage
+
+rel_abun_RepStage_test <- left_join(df_sampleid_repstatestage, rel_abun_RepStage, by = "SAMPLE_ID") #joining so that we have a df of sample id, genus, and rep state stage
+rel_abun_RepStage <- rel_abun_RepStage_test #saving this into the df
+rel_abun_RepStage$RepStateStage <- factor(rel_abun_RepStage$RepStateStage, levels = c("PregnancyStage1", "PregnancyStage2", "PregnancyStage3", "NursingStage1", "NursingStage2", "NursingStage3"))
+
+write.csv(rel_abun_RepStage, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/Metadata/relAbundanceByRepStage6May2020.csv")
+```
+
+Filter to genera of interest
+
+Reading in table of genera that had a log2 fold difference
+
+```{r}
+res_df <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/diffAbundConcatResults22April.csv")
+listOfGenera <- unique(res_df$Genus) ; listOfGenera
+```
+
+Preparing for plots
+
+```{r}
+breaks_RepStage = c("PregnancyStage1", "PregnancyStage2", "PregnancyStage3", "NursingStage1", "NursingStage2", "NursingStage3")
+labels_RepStage = c("Pregnancy Stage 1", "Pregnancy Stage 2", "Pregnancy Stage 3", "Nursing Stage 1", "Nursing Stage 2", "Nursing Stage 3")
+```
+
+
+Anaerosporobacter plot
+
+```{r}
+Anaerosporobacter_RepState <- rel_abun_RepStage %>%
+                        dplyr::select(SAMPLE_ID, Anaerosporobacter, RepStateStage)
+
+Anaerosporobacter_RepState_plot <-ggplot(Anaerosporobacter_RepState, aes(x = RepStateStage, y = Anaerosporobacter*100)) +
+                                   geom_boxplot() +
+                                   theme_bw() +
+                                   scale_x_discrete(breaks = breaks_RepStage,
+                                                    labels = labels_RepStage) +
+                                   xlab("") +
+                                   ylab("Anaerosporobacter\nRelative Abundance (%)\n") +
+                                   theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 0.95, hjust = 1),
+                                         axis.text.y  = element_text(size=11, color="black"),
+                                         axis.title.y  = element_text(size=14, color="black")) ;Anaerosporobacter_RepState_plot
+```
+
+Xylella plot
+
+```{r}
+Xylella_RepState <- rel_abun_RepStage %>%
+                        dplyr::select(SAMPLE_ID, Xylella, RepStateStage)
+
+Xylella_RepState_plot <-ggplot(Xylella_RepState, aes(x = RepStateStage, y = Xylella*100)) +
+                                   geom_violin() +
+                                   theme_bw() +
+                                   scale_x_discrete(breaks = breaks_RepStage,
+                                                    labels = labels_RepStage) +
+                                   xlab("") +
+                                   ylab("Xylella\nRelative Abundance (%)\n") +
+                                   theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 0.95, hjust = 1),
+                                         axis.text.y  = element_text(size=11, color="black"),
+                                         axis.title.y  = element_text(size=14, color="black")) ;Xylella_RepState_plot
+```
+
+Clostridium_sensu_stricto_1 plot
+
+```{r}
+Clostridium_sensu_stricto_1_RepState <- rel_abun_RepStage %>%
+                        dplyr::select(SAMPLE_ID, Clostridium_sensu_stricto_1, RepStateStage)
+
+Clostridium_RepState_plot <-ggplot(clostridium_RepState, aes(x = RepStateStage, y = Clostridium_sensu_stricto_1*100)) +
+                                   geom_boxplot() +
+                                   theme_bw() +
+                                   scale_x_discrete(breaks = breaks_RepStage,
+                                                    labels = labels_RepStage) +
+                                   xlab("") +
+                                   ylab("Clostridium sensu stricto 1\nRelative Abundance (%)\n") +
+                                   theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 0.95, hjust = 1),
+                                         axis.text.y  = element_text(size=11, color="black"),
+                                         axis.title.y  = element_text(size=14, color="black")) ;Clostridium_RepState_plot
+        
+```
+
+Klebsiella plot
+
+```{r}
+Klebsiella_RepState <- rel_abun_RepStage %>%
+                        dplyr::select(SAMPLE_ID, Klebsiella, RepStateStage)
+
+Klebsiella_RepState_plot <-ggplot(Klebsiella_RepState, aes(x = RepStateStage, y = Klebsiella*100)) +
+                                   geom_boxplot() +
+                                   theme_bw() +
+                                   scale_x_discrete(breaks = breaks_RepStage,
+                                                    labels = labels_RepStage) +
+                                   xlab("") +
+                                   ylab("Klebsiella\nRelative Abundance (%)\n") +
+                                   theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 0.95, hjust = 1),
+                                         axis.text.y  = element_text(size=11, color="black"),
+                                         axis.title.y  = element_text(size=14, color="black")) ;Klebsiella_RepState_plot
+
+```
+
+Veillonella plot
+
+```{r}
+Veillonella_RepState <- rel_abun_RepStage %>%
+                        dplyr::select(SAMPLE_ID, Veillonella, RepStateStage)
+
+Veillonella_RepState_plot <-ggplot(Veillonella_RepState, aes(x = RepStateStage, y = Veillonella*100)) +
+                                   geom_boxplot() +
+                                   theme_bw() +
+                                   scale_x_discrete(breaks = breaks_RepStage,
+                                                    labels = labels_RepStage) +
+                                   xlab("") +
+                                   ylab("Veillonella\nRelative Abundance (%)\n") +
+                                   theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 0.95, hjust = 1),
+                                         axis.text.y  = element_text(size=11, color="black"),
+                                         axis.title.y  = element_text(size=14, color="black")) ;Veillonella_RepState_plot
+```
+
+Anaerobiospirillum plot
+
+```{r}
+Anaerobiospirillum_RepState <- rel_abun_RepStage %>%
+                        dplyr::select(SAMPLE_ID, Anaerobiospirillum, RepStateStage)
+
+Anaerobiospirillum_RepState_plot <-ggplot(Anaerobiospirillum_RepState, aes(x = RepStateStage, y = Anaerobiospirillum*100)) +
+                                   geom_boxplot() +
+                                   theme_bw() +
+                                   scale_x_discrete(breaks = breaks_RepStage,
+                                                    labels = labels_RepStage) +
+                                   xlab("") +
+                                   ylab("Anaerobiospirillum\nRelative Abundance (%)\n") +
+                                   theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 0.95, hjust = 1),
+                                         axis.text.y  = element_text(size=11, color="black"),
+                                         axis.title.y  = element_text(size=14, color="black")) ;Anaerobiospirillum_RepState_plot
+```
+
+Serratia plot
+
+```{r}
+Serratia_RepState <- rel_abun_RepStage %>%
+                        dplyr::select(SAMPLE_ID, Serratia, RepStateStage)
+
+Serratia_RepState_plot <-ggplot(Serratia_RepState, aes(x = RepStateStage, y = Serratia*100)) +
+                                   geom_boxplot() +
+                                   theme_bw() +
+                                   scale_x_discrete(breaks = breaks_RepStage,
+                                                    labels = labels_RepStage) +
+                                   xlab("") +
+                                   ylab("Serratia\nRelative Abundance (%)\n") +
+                                   theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 0.95, hjust = 1),
+                                         axis.text.y  = element_text(size=11, color="black"),
+                                         axis.title.y  = element_text(size=14, color="black")) ;Serratia_RepState_plot
+
+
+```
+
+Gordonia plot
+
+```{r}
+Gordonia_RepState <- rel_abun_RepStage %>%
+                        dplyr::select(SAMPLE_ID, Gordonia, RepStateStage)
+
+Gordonia_RepState_plot <-ggplot(Gordonia_RepState, aes(x = RepStateStage, y = Gordonia*100)) +
+                                   geom_boxplot() +
+                                   theme_bw() +
+                                   scale_x_discrete(breaks = breaks_RepStage,
+                                                    labels = labels_RepStage) +
+                                   xlab("") +
+                                   ylab("Gordonia\nRelative Abundance (%)\n") +
+                                   theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 0.95, hjust = 1),
+                                         axis.text.y  = element_text(size=11, color="black"),
+                                         axis.title.y  = element_text(size=14, color="black")) ;Gordonia_RepState_plot
+```
+
+Pluralibacter plot
+
+```{r}
+Pluralibacter_RepState <- rel_abun_RepStage %>%
+                        dplyr::select(SAMPLE_ID, Pluralibacter, RepStateStage)
+
+Pluralibacter_RepState_plot <-ggplot(Pluralibacter_RepState, aes(x = RepStateStage, y = Pluralibacter*100)) +
+                                   geom_boxplot() +
+                                   theme_bw() +
+                                   scale_x_discrete(breaks = breaks_RepStage,
+                                                    labels = labels_RepStage) +
+                                   xlab("") +
+                                   ylab("Pluralibacter\nRelative Abundance (%)\n") +
+                                   theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 0.95, hjust = 1),
+                                         axis.text.y  = element_text(size=11, color="black"),
+                                         axis.title.y  = element_text(size=14, color="black")) ;Pluralibacter_RepState_plot
+```
+
+Alloprevotella plot
+
+```{r}
+Alloprevotella_RepState <- rel_abun_RepStage %>%
+                        dplyr::select(SAMPLE_ID, Alloprevotella, RepStateStage)
+
+Alloprevotella_RepState_plot <-ggplot(Alloprevotella_RepState, aes(x = RepStateStage, y = Alloprevotella*100)) +
+                                   geom_boxplot() +
+                                   theme_bw() +
+                                   scale_x_discrete(breaks = breaks_RepStage,
+                                                    labels = labels_RepStage) +
+                                   xlab("") +
+                                   ylab("Alloprevotella\nRelative Abundance (%)\n") +
+                                   theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 0.95, hjust = 1),
+                                         axis.text.y  = element_text(size=11, color="black"),
+                                         axis.title.y  = element_text(size=14, color="black")) ;Alloprevotella_RepState_plot
+```
+
+Tatumella plot
+
+```{r}
+Tatumella_RepState <- rel_abun_RepStage %>%
+                        dplyr::select(SAMPLE_ID, Tatumella, RepStateStage)
+
+Tatumella_RepState_plot <-ggplot(Tatumella_RepState, aes(x = RepStateStage, y = Tatumella*100)) +
+                                   geom_boxplot() +
+                                   theme_bw() +
+                                   scale_x_discrete(breaks = breaks_RepStage,
+                                                    labels = labels_RepStage) +
+                                   xlab("") +
+                                   ylab("Tatumella\nRelative Abundance (%)\n") +
+                                   theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 0.95, hjust = 1),
+                                         axis.text.y  = element_text(size=11, color="black"),
+                                         axis.title.y  = element_text(size=14, color="black")) ;Tatumella_RepState_plot
+```
+
+Enterococcus plot
+
+```{r}
+Enterococcus_RepState <- rel_abun_RepStage %>%
+                        dplyr::select(SAMPLE_ID, Enterococcus, RepStateStage)
+
+Enterococcus_RepState_plot <-ggplot(Enterococcus_RepState, aes(x = RepStateStage, y = Enterococcus*100)) +
+                                   geom_boxplot() +
+                                   theme_bw() +
+                                   scale_x_discrete(breaks = breaks_RepStage,
+                                                    labels = labels_RepStage) +
+                                   xlab("") +
+                                   ylab("Enterococcus\nRelative Abundance (%)\n") +
+                                   theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 0.95, hjust = 1),
+                                         axis.text.y  = element_text(size=11, color="black"),
+                                         axis.title.y  = element_text(size=14, color="black")) ;Enterococcus_RepState_plot
+```
+
+Erysipelatoclostridium plot
+
+```{r}
+Erysipelatoclostridium_RepState <- rel_abun_RepStage %>%
+                        dplyr::select(SAMPLE_ID, Erysipelatoclostridium, RepStateStage)
+
+Erysipelatoclostridium_RepState_plot <-ggplot(Erysipelatoclostridium_RepState, aes(x = RepStateStage, y = Erysipelatoclostridium*100)) +
+                                   geom_boxplot() +
+                                   theme_bw() +
+                                   scale_x_discrete(breaks = breaks_RepStage,
+                                                    labels = labels_RepStage) +
+                                   xlab("") +
+                                   ylab("Erysipelatoclostridium\nRelative Abundance (%)\n") +
+                                   theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 0.95, hjust = 1),
+                                         axis.text.y  = element_text(size=11, color="black"),
+                                         axis.title.y  = element_text(size=14, color="black")) ;Erysipelatoclostridium_RepState_plot
+```
+
+
+
+
+
+
+
+
+
