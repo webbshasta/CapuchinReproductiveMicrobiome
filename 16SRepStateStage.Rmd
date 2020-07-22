@@ -16,8 +16,8 @@ Here we will start with a seqtab.nochim object and a taxa object.
 Read in seqtab.nochim and taxa if not already in your environment. 
 
 ```{r}
-seqtab.nochim <- readRDS("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/seqtab.nochim.RDS"); rownames(seqtab.nochim)
-taxa <- readRDS("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/taxa.RDS")
+seqtab.nochim <- readRDS("seqtab.nochim.RDS"); rownames(seqtab.nochim)
+taxa <- readRDS("taxa.RDS")
 taxa.print <- taxa # Removing sequence rownames for display only
 rownames(taxa.print) <- NULL
 head(taxa.print)
@@ -26,29 +26,16 @@ head(taxa.print)
 Read in the metadata.
 
 ```{r}
-metadataStage <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/Metadata/repStateStageMetaData22April.csv")
-as.data.frame(metadataStage)
+metadataStage <- read.csv("SSRMetaData_FemalesControls_22July.csv")
 ```
 
 ```{r}
-metadataStage <- metadataStage %>% filter(SEX != "Male"); View(metadataStage) #168 samples including controls
 metadataStage <- metadataStage %>%
                  arrange(., SAMPLE_ID)
 row.names(metadataStage) <- metadataStage$SAMPLE_ID #setting the row names for the metadata to be the sample ID
 ```
 
 #### Matching metadata to sequence table
-
-```{r data cleaning}
-ControlsDF <- SSRmetadata %>% 
-              filter(., SampleOrControl == "Control") %>% #adding controls to the metadata file for the rep stage analysis
-              select(-X.2, -X.1) %>%
-              mutate(StartDate = NA, EndDate = NA, RepStateStage = NA)
-
-rownames(ControlsDF) <- ControlsDF$SAMPLE_ID #setting sampled ID to rownames
-stageTest <- rbind(metadataStage, ControlsDF) #joining the controls back into the metadata
-metadataStage <- stageTest #saving changes in metadata DF
-```
 
 Check to see if seqtab and metadata are equivalent.
 

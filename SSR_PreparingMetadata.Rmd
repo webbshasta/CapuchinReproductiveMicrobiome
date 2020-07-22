@@ -120,8 +120,7 @@ SSRMetaData6 <- SSRM %>%
                             by = c("INDIVIDUAL" = "Animal", "DATE" = "StartDate", "DATE" = "EndDate"), 
                             match_fun = list(`==`, `>=`, `<=`)); View(SSRMetaData6) #adding rep status for all animals; males and females who are not in rep table will have NAs
 
-#SSRMetaData7 <- SSRMetaData6 %>%
-                #mutate(ReproductiveStatus = replace(ReproductiveStatus, is.na(ReproductiveStatus) & SEX == "Female", "Unknown")) #replacing the NA females with unknown
+
 
 SSRMetaData8 <- SSRMetaData6 %>%
                 dplyr::select(-Animal, -AnimalCode, -X.x, -X.y, -X.1)
@@ -173,17 +172,36 @@ SSRM <- SSRMMetaData10
 write.csv(SSRM,"~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/Metadata/SSRMetaData16SPregnancy_22April.csv")
 ```
 
+
+### Adding stage data for all three states
+
 We decided to run the microbiome analysis on the stages of cycling and pregnancy and lactation. I'm going to read in the prepped meta data, and do an additional join to get the cycling stages in there. 
 
 To prepare the stages of cycling, pregnancy, and lactation:
 
 ```{r}
-stageDF <- read.csv("~/Desktop/PregnancyPaper2019/BehaviouralAnalysis/EcologicalDataCensus/RepStatusSSRFemalesCleanCYCLIng_STAGE.csv")
+stageDF <- read.csv("RepStatusSSRFemalesCleanCYCLIng_STAGE.csv") #this has cycling stages as well 
 
-#stageDF <- stageDF %>%
-#           filter(., ReproductiveStatus == "Pregnant" | ReproductiveStatus == "Nursing")
-
+SSRM <- read.csv("MicrobiomeAnalysis/Metadata/SEW_SSRMetaData_Clean22April.csv") #reading in clean metadata
 ```
+
+Left joining the updated rep statuses (which includes the cycling stages)
+
+```{r}
+SSRM <- SSRM %>%
+        fuzzy_left_join(., stageDF, 
+                            by = c("INDIVIDUAL" = "Animal", "DATE" = "StartDate", "DATE" = "EndDate"), 
+                            match_fun = list(`==`, `>=`, `<=`))
+
+colnames(SSRM) #need to filter out the duplicated columns
+
+SSRM <- SSRM %>% 
+        select(-X, -Animal, -AnimalCode, -StartDate.y, -EndDate.y, -DaysInState, -Miscarriage.y, -InfantSurvive1Year.y, -InfantSurvive3Years.y) %>%
+        dplyr::rename(StartDate = StartDate.x, EndDate = EndDate.x, ReproductiveStatus = ReproductiveStatus.x, Miscarriage = Miscarriage.x, InfantSurvive1Year = InfantSurvive1Year.x, InfantSurvive3Years = InfantSurvive3Years.x,  ReproductiveStage = ReproductiveStatus.y)
+
+View(SSRM) #This now has a column for overall state, and another column for stage
+```
+
 
 To add nursing and pregnancy stages to the metadata, we will bring in the full metadata set, and filter for only the categories we are going to analyse. Gestation is considered 157 days in this dataset, as per Carnegie et al. 2011. Nursing is considered 365 days.
 
@@ -196,54 +214,29 @@ Nursing Stage 2: 122-242
 Nursing Stage 3: 243-365
 
 ```{r}
-stageMetaData <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/Metadata/SSRMetaData16SPregnancy_22April.csv")
-View(stageMetaData) #512 rows
-stageMetaData <- stageMetaData %>%
-                 filter(., REP_STATE =="Pregnant" | REP_STATE == "Nursing" | SampleOrControl == "Control") #Keep all samples where females were preg or nursing, keep controls
 
-stageMetaData$DATE = as.Date(stageMetaData$DATE)
-stageMetaData$StartDate = as.Date(stageMetaData$StartDate)
-stageMetaData$EndDate = as.Date(stageMetaData$EndDate)
+SSRM$DATE = as.Date(SSRM$DATE)
+SSRM$StartDate = as.Date(SSRM$StartDate)
+SSRM$EndDate = as.Date(SSRM$EndDate)
 
-stageMetaData2 <- stageMetaData %>%
-                  mutate(RepStateStage = case_when(REP_STATE == "Nursing" & DATE >= StartDate & DATE <= StartDate + days(121) ~ "NursingStage1",
-                                                   REP_STATE == "Nursing" & DATE >= StartDate + days(122) & DATE <= StartDate + days(242) ~ "NursingStage2",
-                                                   REP_STATE == "Nursing" & DATE >= StartDate + days(243) & DATE <= EndDate ~ "NursingStage3",
-                                                   REP_STATE == "Pregnant" & DATE >= StartDate & DATE <= StartDate + days(53) ~ "PregnancyStage1",
-                                                   REP_STATE == "Pregnant" & DATE >= StartDate + days(54) & DATE <= StartDate + days(104) ~ "PregnancyStage2",
-                                                   REP_STATE == "Pregnant" & DATE >= StartDate + days(105) & DATE <= EndDate ~ "PregnancyStage3"))
-stageMetaData2 <- stageMetaData2 %>%
-                  select(-X, -X.1)
+SSRM <- SSRM %>%
+        mutate(ReproductiveStage = 
+               case_when(ReproductiveStage == "Nursing" & DATE >= StartDate & DATE <= StartDate + days(121) ~ "NursingStage1",
+                         ReproductiveStage == "Nursing" & DATE >= StartDate + days(122) & DATE <= StartDate + days(242) ~ "NursingStage2",
+                         ReproductiveStage == "Nursing" & DATE >= StartDate + days(243) & DATE <= EndDate ~ "NursingStage3",
+                         ReproductiveStage == "Pregnant" & DATE >= StartDate & DATE <= StartDate + days(53) ~ "PregnancyStage1",
+                         ReproductiveStage == "Pregnant" & DATE >= StartDate + days(54) & DATE <= StartDate + days(104) ~ "PregnancyStage2",
+                         ReproductiveStage == "Pregnant" & DATE >= StartDate + days(105) & DATE <= EndDate ~ "PregnancyStage3",
+                         ReproductiveStage == "Cycling" ~ "Cycling",
+                         ReproductiveStage == "Cycling_PostWeaning" ~ "Cycling_PostWeaning",
+                         ReproductiveStage == "Cycling_Pre_Conception" ~ "Cycling_Pre_Conception",
+                         ReproductiveStage == "Cycling_PostMiscarriage" ~ "Cycling_PostMiscarriage",
+                         ReproductiveStage == "Cycling_PostInfantDeath" ~ "Cycling_PostInfantDeath"))
 
-write.csv(stageMetaData2, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/Metadata/repStateStageMetaData22April.csv")
+write.csv(SSRM, "SSRMetaData_AllInd_22July.csv")
 
-```
+SSRM <- filter(SSRM, SEX != "Male")
 
-### Summaries of the data
-
-Creating a figure for rep status 
-
-```{r}
-repStatusDF <- read.csv("~/Desktop/PregnancyPaper2019/BehaviouralAnalysis/EcologicalDataCensus/RepStatusSSRFemalesClean.csv")
-
-repStatusDF <- repStatusDF %>%
-               filter(., ReproductiveStatus == "Cycling" | ReproductiveStatus == "Nursing" | ReproductiveStatus == "Pregnant")
-
-repStatusDF$StartDate <- as.Date(repStatusDF$StartDate)
-repStatusDF$EndDate <- as.Date(repStatusDF$EndDate)
-
-q <- ggplot(repStatusDF, aes(color = ReproductiveStatus)) +
-      geom_segment(aes(x=StartDate, xend=EndDate, y=Animal, yend=Animal), size=3); q
-
-
-```
-
-
-```{r}
-metadataStageFilt <- metadataStageFilt %>%
-                     mutate(MonthOfYear = format(as.Date(DATE,format="%Y-%m-%d"),"%Y-%m"))
-
-psStageSummary <- ggplot(metadataStageFilt, aes(INDIVIDUAL, MonthOfYear, fill = RepStateStage)) +
-                    geom_bar()
+write.csv(SSRM, "SSRMetaData_FemalesControls_22July.csv" )
 ```
 
