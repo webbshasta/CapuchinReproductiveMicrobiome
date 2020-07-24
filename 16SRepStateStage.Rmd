@@ -14,7 +14,13 @@ Here we will start with a seqtab.nochim object and a taxa object.
 ### Handoff to Phyloseq package & saving otu table/taxa table for future use
 
 ```{r}
-library(phyloseq); library(vegan); library(ggplot2); library(decontam); library(ggpubr)
+library(phyloseq); library(vegan); library(ggplot2); library(decontam); library(ggpubr); library(gridExtra)
+library(lme4)
+library(broom)
+library(emmeans)
+library(multcomp)
+library(multcompView)
+library(gridExtra)
 ```
 
 
@@ -51,7 +57,7 @@ indToRemoveFromSeqtab <- setdiff(row.names(seqtab.nochim), metadataStage$SAMPLE_
 length(indToRemoveFromSeqtab) #114 samples need to be removed from the seqtab--these are the males
 
 indToRemoveFromMetadata <- setdiff(metadataStage$SAMPLE_ID, row.names(seqtab.nochim)) ;indToRemoveFromMetadata
-length(indToRemoveFromMetadata) #these are the samples that we need to remove from the metadata
+length(indToRemoveFromMetadata) #21 these are the samples that we need to remove from the metadata
 ```
 
 Remove samples from seqtab that are not in the metadata. 
@@ -222,6 +228,14 @@ psStage <- subset_taxa(psStage, !is.na(Family) & !Family %in% c("Mitochondria"))
 psStage #15012 taxa and 327 samples
 ```
 
+### Ensuring we only have females for which we have reproductive status data 
+
+```{r}
+metadataStageFilt <- filter(metadataStageFilt, !is.na(ReproductiveStatus)) #pruning samples with no rep state
+psStage <- prune_samples(!is.na(sample_data(psStage)$ReproductiveStatus), psStage) #pruning samples with no rep state
+psStage #15012 taxa and 313 samples
+```
+
 ### Alpha-diversity (Shannon) vs. species richness (Chao1)
 
 We are doing this step before filtering for low abundance taxa.
@@ -240,11 +254,14 @@ metadataStageFilt$evenness<-adiv$Shannon/log(adiv$Observed)
 Boxplots with ggplot2
 
 ```{r boxplots}
-metadataStageFilt <- filter(metadataStageFilt, !is.na(ReproductiveStatus)) #pruning Fleur (she has no rep state)
-psStage <- prune_samples(!sample_data(psStage)$INDIVIDUAL == "Fleur", psStage)
-psStage #5012 taxa and 319 samples after removing Fleur
 
-metadataStageFilt$ReproductiveStatus <- factor(metadataStageFilt$ReproductiveStatus, levels = c("Cycling", "Pregnant", "Nursing"))
+#Before filtering more, we will save this ps object
+saveRDS(psStage, "psStage.RDS") #This ps object has all cycling states and stages; it has been decontaminated short read samples have been removed. NA rep statuses have been removed it has not undergone any prevalence filtering
+
+metadataStageFilt$ReproductiveStatus <- factor(metadataStageFilt$ReproductiveStatus, levels = c("Cycling", "Pregnant", "Nursing")) #reording factor levels
+
+write.csv(metadataStageFilt, "metadataStageFilt_prePrevFiltering.csv")
+metadataStageFilt <- read.csv("metadataStageFilt_prePrevFiltering.csv")
 
 repState_richness <-ggplot(metadataStageFilt, aes(ReproductiveStatus, chao1,fill=ReproductiveStatus)) +
                            theme_bw() +
@@ -270,6 +287,48 @@ repState_alphaDiv <-ggplot(metadataStageFilt, aes(ReproductiveStatus, alphadiv,f
 SI_figure_StateRichnessAlpha <- ggarrange(repState_richness, repState_alphaDiv,
                                           labels = c("A", "B"),
                                           ncol = 1, nrow = 2, align = "v"); SI_figure_StateRichnessAlpha
+
+ggsave("SI_figure_StateRichnessAlpha.pdf", plot = SI_figure_StateRichnessAlpha, width = 4, height = 6)
+```
+
+### Significant differences between groups/rep states
+
+Linear models, anovas, & Post-hoc tests
+
+```{r linear model}
+# Chao1
+summary(fm1<-aov(log(chao1)~ReproductiveStatus, data=metadataStageFilt))
+post_oc<-TukeyHSD(fm1, "ReproductiveStatus", ordered=FALSE); post_oc
+SITable_tukeyRichnessState <- as.data.frame(post_oc$ReproductiveStatus)
+write.csv(SITable_tukeyRichnessState, "Results/SITable_tukeyRichnessState.csv")
+
+#Shannon
+summary(fm1<-aov(log(alphadiv)~ReproductiveStatus, data=metadataStageFilt))
+post_oc<-TukeyHSD(fm1, "ReproductiveStatus", ordered=FALSE); post_oc
+```
+
+Non-parametric tests & Post-hoc tests
+
+```{r non-para}
+# Chao1
+kruskal.test(chao1~ReproductiveStatus, data=metadataStageFilt)
+#dunnTest(data=SSRFemalesMetaData,chao1~REP_STATE, method="bh")
+
+# Shannon
+kruskal.test(alphadiv~ReproductiveStatus, data=metadataStageFilt)
+#dunnTest(data=SSRFemalesMetaData,alphadiv~REP_STATE, method="bh")
+```
+
+Linear-mixed models
+
+```{r linear mixed model}
+# Chao1
+fit_chao1 <- lmer(chao1~ ReproductiveStatus + (1 | INDIVIDUAL), data=metadataStageFilt)
+Anova(fit_chao1)
+
+# Shannon
+fit_shannon <- lmer(alphadiv~ ReproductiveStatus + (1 | INDIVIDUAL),data=metadataStageFilt)
+anova(fit_shannon)
 ```
 
 A useful next step is to explore feature prevalence in the dataset, which we will define here as the number of samples in which a taxa appears at least once. (from f1000 paper)
@@ -293,15 +352,13 @@ plyr::ddply(prevdf, "Phylum", function(df1){cbind(mean(df1$Prevalence),sum(df1$P
 
 ```{r}
 # Define phyla to filter
-filterPhyla = c("Deferribacteres", "Dependentiae", "Entotheonellaeota", "Euryarchaeota", "Fibrobacteres", "Lentisphaerae", "Synergistetes", "Tenericutes")
+filterPhyla = c("Deferribacteres", "Dependentiae", "Entotheonellaeota", "Euryarchaeota", "Fibrobacteres", "Hydrogenedentes", "Lentisphaerae", "Omnitrophicaeota", "Synergistetes", "Rokubacteria", "Spirochaetes", "Tenericutes")
 
-# Filter entries with unidentified Phylum.
+# Filter entries with low prevalence of Phylum.
 ps1 <- subset_taxa(psStage, !Phylum %in% filterPhyla)
-ps1 #4244 taxa and 139 samples
+ps1 #14894 taxa and 313 samples
 psStage <- ps1
 ```
-
-
 
 Prevalence Filtering
 
@@ -327,9 +384,9 @@ prevalenceThreshold
 # Execute prevalence filter, using `prune_taxa()` function
 keepTaxa <- rownames(prevdf1)[(prevdf1$Prevalence >= prevalenceThreshold)]
 ps2 <- prune_taxa(keepTaxa, psStage)
-ps2 #343 taxa and 139 samples
+ps2 #331 taxa and 313 samples
 psStage <- ps2
-saveRDS(psStage, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/psObjectCleanStage4May.RDS")
+saveRDS(psStage, "psStage_prev05.RDS") #this ps object is all rep states and stages and filtered low prev phyla and filtered to a 5% prevalence threshold
 ```
 
 ### Agglomerate taxa
@@ -340,10 +397,10 @@ When there is known to be a lot of species or sub-species functional redundancy 
 # How many genera would be present after filtering?
 length(get_taxa_unique(psStage, taxonomic.rank = "Genus"))
 
-## [1] 148 genera
+## [1] 144 genera
 
 psGlomStage <- tax_glom(psStage, "Genus", NArm = TRUE)
-psGlomStage #147 taxa and 139 samples
+psGlomStage #143 taxa and 313 samples
 ```
 
 ### Tailoring to different research questions
@@ -355,13 +412,13 @@ It is usually necessary to transform microbiome count data to account for differ
 #### Function for plotting abundance according to reproductive state stage
 
 ```{r}
-plot_abundance_Stage <- function(physeq,title = "",
+plot_abundance_Status <- function(physeq,title = "",
 			     Facet = "Order", Color = "Phylum"){
   # Arbitrary subset, based on Phylum, for plotting
   p1f <- subset_taxa(physeq, Phylum %in% c("Firmicutes"))
   mphyseq <- psmelt(p1f)
   mphyseq <- subset(mphyseq, Abundance > 0)
-  ggplot(data = mphyseq, mapping = aes_string(x = "RepStateStage",y = "Abundance",
+  ggplot(data = mphyseq, mapping = aes_string(x = "ReproductiveStatus",y = "Abundance",
                                  color = Color, fill = Color)) +
     geom_violin(fill = NA) +
     geom_point(size = 1, alpha = 0.3,
@@ -375,14 +432,10 @@ plot_abundance_Stage <- function(physeq,title = "",
 
 ```{r}
 # Transform to relative abundance. Save as new object.
-
 psGlomRa <- transform_sample_counts(psGlomStage, function(x){x / sum(x)})
 
-#ord.NMDS.bray <- ordinate(ps3ra, method = "NMDS", distance = "bray")
-#plot_ordination(ps3ra, ord.NMDS.bray, color = "REP_STATE")
-
-plotBefore <- plot_abundance_Stage(psGlomStage,"")
-plotAfter <- plot_abundance_Stage(psGlomRa,"")
+plotBefore <- plot_abundance_Status(psGlomStage,"")
+plotAfter <- plot_abundance_Status(psGlomRa,"")
 # Combine each plot into one graphic.
 grid.arrange(nrow = 2, plotBefore, plotAfter)
 ```
@@ -402,7 +455,7 @@ gm_mean <- function(x, na.rm=TRUE){
 }
 
 # Variance Stabilizing Transformation (REP_STATE)
-test.phyloseq.dds<-phyloseq_to_deseq2(psStage,~RepStateStage)
+test.phyloseq.dds<-phyloseq_to_deseq2(psStage,~ReproductiveStatus)
 test.phyloseq.dds <- estimateSizeFactors(test.phyloseq.dds, geoMeans = apply(counts(test.phyloseq.dds), 1, gm_mean))
 vst.blind <- DESeq2::varianceStabilizingTransformation(test.phyloseq.dds, blind=TRUE)
 vst.blind.Mat <- SummarizedExperiment::assay(vst.blind) # Extract transformed OTU table
@@ -418,9 +471,9 @@ PCoA.comm.vst.blind.Mat #this will re-order rownames to be alphabetic, which is 
 eig <- PCoA.comm.vst.blind.Mat$CA$eig
 
 # Portion of total vraiation in community structure explained by each of the main three components
-eig[1]/sum(abs(eig)) #
-eig[2]/sum(abs(eig)) #
-eig[3]/sum(abs(eig)) #
+eig[1]/sum(abs(eig)) #0.1820423 
+eig[2]/sum(abs(eig)) #0.08577119 
+eig[3]/sum(abs(eig)) #0.05733904
 
 # Save scores in dataset tables
 mdTest <- metadataStageFilt %>% #ensure that the df is ordered by SAMPLE_ID
@@ -432,13 +485,196 @@ metadataStageFilt$PCoA1<-scores(PCoA.comm.vst.blind.Mat)$sites[,1]
 metadataStageFilt$PCoA2<-scores(PCoA.comm.vst.blind.Mat)$sites[,2]
 
 # PERMANOVA
-permanovaMulti<-adonis(comm.vst.blind.Mat ~ RepStateStage + dietType + MONTH + INDIVIDUAL + Rainfall, data=metadataStageFilt, permutations = 2000)
-permanovaMulti$aov.tab
+permanovaMulti<-adonis(comm.vst.blind.Mat ~ ReproductiveStatus + dietType + MONTH + INDIVIDUAL + Rainfall, data=metadataStageFilt, permutations = 2000)
+permanova_betaDiv_state <- as.data.frame(permanovaMulti$aov.tab)
+write.csv(permanova_betaDiv_state, "Results/permanova_betaDiv_state.csv")
 ```
 
 ### PCoA with ggplot2
 
 Let's visualize beta-diversity in a figure using PCoA with Bray-Curtis distances. 
+
+```{r}
+summary(metadataStageFilt)
+
+metadataStageFilt$ReproductiveStatus <- factor(metadataStageFilt$ReproductiveStatus, levels = c("Cycling", "Pregnant", "Nursing")) #changing the order of the levels of rep satus from alphabetical to the order we want them in the plots
+
+betaDivPCoAStatus <- ggplot(metadataStageFilt, aes(PCoA1, PCoA2, color = ReproductiveStatus)) +
+                    geom_point(size = 3) +
+                    labs(x = "\nPCoA1 [18.2% variance]", y = "PCoA2 [8.57% variance]\n") +
+                    scale_color_manual(values = c("goldenrod1", "darkslategray4", "olivedrab4")) +
+                    theme_minimal() + 
+                    stat_ellipse() +
+                    theme(text = element_text(size = 14),
+                          legend.title = element_blank(),
+                          legend.position = "bottom"); betaDivPCoAStatus
+
+ggsave("SI_figure_betaDivPCoAStatus.pdf", plot = betaDivPCoAStatus, width = 6, height = 4)
+```
+
+### Top genera in community
+
+```{r top genera}
+GF_comm<-as.matrix(t(otu_table(psGlomRa, taxa_are_rows=FALSE))) #using agglomerated taxa
+dim(GF_comm) #143 313
+rel_abun_GF<-sweep(GF_comm, 2, apply(GF_comm,2,sum), `/`)
+dim(rel_abun_GF)  #143 313
+apply(rel_abun_GF,2,sum)
+dim(rel_abun_GF)[1]->t
+apply(rel_abun_GF,1,sum)
+order(apply(rel_abun_GF,1,sum))[(t-9):t]
+top10_asvs_GF<-names(apply(rel_abun_GF,1,sum)[order(apply(rel_abun_GF,1,sum))[(t-9):t]])
+taxa[top10_asvs_GF,]->top10_taxa_GF
+row.names(top10_taxa_GF)<-c(length(row.names(top10_taxa_GF)):1)
+paste("asv_",row.names(top10_taxa_GF),sep="")->row.names(top10_taxa_GF)
+top10_taxa_GF
+# Test for changes in relative abundance in dominant taxa
+rel_abun_top10_asvs<-rel_abun_GF[top10_asvs_GF,]
+row.names(rel_abun_top10_asvs)<-row.names(top10_taxa_GF)
+rel_abun_top10_asvs<-t(rel_abun_top10_asvs)
+rel_abun_top10_asvs<-as.data.frame(rel_abun_top10_asvs)
+rel_abun_top10_asvs$SAMPLE_ID<-row.names(rel_abun_top10_asvs)
+metadataStageFilt$ReproductiveStatus[as.factor(row.names(rel_abun_top10_asvs))]->rel_abun_top10_asvs$ReproductiveStatus
+long_rel_abun_top10_asvs<-tidyr::gather(rel_abun_top10_asvs, key=SAMPLE_ID, value=rel_abund, asv_10:asv_1)
+dim(long_rel_abun_top10_asvs)
+colnames(long_rel_abun_top10_asvs)[2]<-"asv_ID"
+long_rel_abun_top10_asvs$plot_ID<-paste(long_rel_abun_top10_asvs$asv_ID,long_rel_abun_top10_asvs$REP_STATE,sep="")
+top10df <- as.data.frame(top10_taxa_GF)
+top10df$asv_ID <- rownames(top10df)
+# Creating log10 column in long_rel_abun_top10_asvs
+testLogDf <- long_rel_abun_top10_asvs %>%
+             mutate(log10_rel_abund = log10(rel_abund))
+for (i in 1:10){
+  print(colnames(rel_abun_top10_asvs[i]))
+  print(kruskal.test(rel_abun_top10_asvs[,i] ~ ReproductiveStatus, data=rel_abun_top10_asvs))
+  #print(dunnTest(rel_abun_top10_asvs[,i] ~ REP_STATE, data=rel_abun_top10_asvs, method="bh"))
+}
+limitsX <- c("asv_1Cycling", "asv_1Pregnant", "asv_1Nursing", "", 
+             "asv_2Cycling", "asv_2Pregnant", "asv_2Nursing", "",
+             "asv_3Cycling", "asv_3Pregnant", "asv_3Nursing", "",
+             "asv_4Cycling", "asv_4Pregnant", "asv_4Nursing", "",
+             "asv_5Cycling", "asv_5Pregnant", "asv_5Nursing", "",
+             "asv_6Cycling", "asv_6Pregnant", "asv_6Nursing", "",
+             "asv_7Cycling", "asv_7Pregnant", "asv_7Nursing", "",
+             "asv_8Cycling", "asv_8Pregnant", "asv_8Nursing", "",
+             "asv_9Cycling", "asv_9Pregnant", "asv_9Nursing", "",
+             "asv_10Cycling", "asv_10Pregnant", "asv_10Nursing")
+
+limitsX2 <- c("asv_1", "asv_2", "asv_3", "asv_4", "asv_5", "asv_6", "asv_7", "asv_8", "asv_9", "asv_10")
+breaksX2 <- c("asv_1", "asv_2", "asv_3", "asv_4", "asv_5", "asv_6", "asv_7", "asv_8", "asv_9", "asv_10")
+
+breaksX <- c("asv_1Cycling", "asv_1Pregnant", "asv_1Nursing", "", 
+             "asv_2Cycling", "asv_2Pregnant", "asv_2Nursing", "",
+             "asv_3Cycling", "asv_3Pregnant", "asv_3Nursing", "",
+             "asv_4Cycling", "asv_4Pregnant", "asv_4Nursing", "",
+             "asv_5Cycling", "asv_5Pregnant", "asv_5Nursing", "",
+             "asv_6Cycling", "asv_6Pregnant", "asv_6Nursing", "",
+             "asv_7Cycling", "asv_7Pregnant", "asv_7Nursing", "",
+             "asv_8Cycling", "asv_8Pregnant", "asv_8Nursing", "",
+             "asv_9Cycling", "asv_9Pregnant", "asv_9Nursing", "",
+             "asv_10Cycling", "asv_10Pregnant", "asv_10Nursing")
+
+labelsX <- c("", "Streptococcus", "", "", 
+             "","Bifidobacterium", "", "",
+             "", "Rothia", "", "", 
+             "", "Lachnoclostridium", "", "", 
+             "", "Megamonas", "", "", 
+             "", "Collinsella", "", "", 
+             "", "Escherichia/\nShigella", "", "",
+             "", "Bacteroides", "", "",
+             "", "Enterococcus", "", "", 
+             "", "Anaerobiospirillum", "")
+
+labelsX2 <-  c("Streptococcus", "Bifidobacterium","Rothia","Lachnoclostridium", "Megamonas", "Collinsella", "Escherichia/\nShigella", "Bacteroides", "Enterococcus", "Anaerobiospirillum")
+  
+# Graph for top 10 genera
+p3log10<-ggplot(testLogDf, aes(plot_ID,log10_rel_abund, fill = ReproductiveStatus))+theme_minimal()+
+  geom_boxplot()+
+  scale_x_discrete(limits = limitsX2,
+                   labels = labelsX2,
+                   breaks = breaksX2) +
+  xlab("")+ylab("log10 Relative Abundance")+
+  theme(axis.text.x  = element_text(size=11, color="black", angle=90, vjust = 0.6, hjust = 1, face = "italic"),
+        axis.text.y  = element_text(size=11, color="black"),
+        axis.title.x  = element_text(size=14, color="black"),
+        axis.title.y  = element_text(size=14, color="black"),
+        legend.title = element_blank(),
+        axis.ticks = element_blank()) +
+        scale_fill_manual(labels = c("Cycling", "Pregnant", "Nursing"),
+                            values = c("goldenrod2", "darkslategray4", "olivedrab4"));p3log10
+
+p3<-ggplot(long_rel_abun_top10_asvs, aes(plot_ID,rel_abund*100, fill = ReproductiveStatus))+theme_minimal()+
+  geom_boxplot()+
+  scale_x_discrete(limits = limitsX2,
+                   labels = labelsX2,
+                   breaks = breaksX2) +
+  xlab("")+ylab("Relative Abundance (%)\n")+
+  theme(axis.text.x  = element_text(size=11, color="black", angle=90, vjust = 0.6, hjust = 1, face = "italic"),
+        axis.text.y  = element_text(size=11, color="black"),
+        axis.title.x  = element_text(size=14, color="black"),
+        axis.title.y  = element_text(size=14, color="black"),
+        legend.title = element_blank(),
+        axis.ticks = element_blank()) +
+        scale_fill_manual(labels = c("Cycling", "Pregnant", "Nursing"),
+                            values = c("goldenrod2", "darkslategray4", "olivedrab4"));p3
+
+ggsave("Figures/topTenGenera_State.pdf", plot = p3, width = 6, height = 4)
+```
+
+### Phyloseq to DESeq2 for differential abundance
+
+The function phyloseq_to_deseq2 converts  phyloseq-format microbiome data into a DESeqDataSet with dispersions estimated, using the experimental design formula, also shown (the ~REP_STATE term). Note: The default multiple-inference correction is Benjamini-Hochberg, and occurs within the DESeq function.
+
+#### Exploring differential abundance 
+
+Since we have a variable of interest with >2 levels, and since we are interested in specific changes between different reproductive states, we can use "contrasts" in DESeq2 to explore log fold changes. From the DESeq2 vignette:
+
+"A contrast is a linear combination of estimated log2 fold changes, which can be used to test if differences between groups are equal to zero. The simplest use case for contrasts is an experimental design containing a factor with three levels, say A, B and C. Contrasts enable the user to generate results for all 3 possible differences: log2 fold change of B vs A, of C vs A, and of C vs B. The contrast argument of results function is used to extract test results of log2 fold changes of interest."
+
+```{r}
+ps.dSeq <- phyloseq_to_deseq2(psStage, ~ReproductiveStatus) #using unagglomerated  object which includes all taxa except for low prevalence phyla (controls are already filtered out)
+ps.dSeq <- estimateSizeFactors(ps.dSeq, geoMeans = apply(counts(ps.dSeq), 1, gm_mean)) #because we have many ASVs that do not appear in all samples, we have to use variance stabilized data to caluculate and visualize differential abundance 
+ps.dSeq <- estimateDispersions(ps.dSeq)
+ps.dSeq.vst <- getVarianceStabilizedData(ps.dSeq)
+dim(ps.dSeq.vst)
+
+psVST <- psStage #psVST will now be the phyloseq object with the variance transformed counts
+
+otu_table(psVST) <- otu_table(ps.dSeq.vst, taxa_are_rows = TRUE) # psVST variable now has the results of DESeq2 variance-stabilization of counts instead of the original counts.
+saveRDS(psVST, "Robjects/psVST_state_24July.RDS")
+
+dds.ps <- DESeq(ps.dSeq, test="Wald", fitType = "parametric") 
+res <- results(dds.ps) #now we can create contrasts and look at other results in the results table 
+```
+
+##### Investigating results 
+
+```{r Preg1 vs Preg2}
+res1 <- results(dds.ps, contrast = c("ReproductiveStatus", "Cycling", "Pregnant")) 
+res1 <- res1[order(res1$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab1 <- res1[(res1$padj < alpha), ]
+sigtab1 <- cbind(as(sigtab1, "data.frame"), as(tax_table(psVST)[rownames(sigtab1), ], "matrix"))
+head(sigtab1)
+
+res2 <- results(dds.ps, contrast = c("ReproductiveStatus", "Pregnant", "Nursing")) 
+res2 <- res2[order(res2$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab2 <- res2[(res2$padj < alpha), ]
+sigtab2 <- cbind(as(sigtab2, "data.frame"), as(tax_table(psVST)[rownames(sigtab2), ], "matrix"))
+head(sigtab2)
+
+res3 <- results(dds.ps, contrast = c("ReproductiveStatus", "Nursing", "Cycling")) 
+res3 <- res3[order(res3$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab3 <- res3[(res3$padj < alpha), ]
+sigtab3 <- cbind(as(sigtab3, "data.frame"), as(tax_table(psVST)[rownames(sigtab3), ], "matrix"))
+head(sigtab3)
+```
+
+
+
+
 
 ```{r}
 summary(metadataStageFilt)
@@ -450,7 +686,7 @@ cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2",
 betaDivPCoAStage <- ggplot(metadataStageFilt, aes(PCoA1, PCoA2, color = RepStateStage)) +
                     geom_point(size = 3) +
                     labs(x = "\nPCoA1 [20.2% variance]", y = "PCoA2 [8.42% variance]\n") +
-                    scale_color_manual(name = NULL, labels = c("Pregnancy Stage 1: 0-53 days", "Pregnancy Stage 2: 54-104 days", "Pregnancy Stage 3: 105-158 days", "Nursing Stage 1: 0-121 days", "Nursing Stage 2: 122-242 days", "Nursing Stage 3: 243-365 days"), values = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2")) +
+                    sscale_fill_manual(values = c("goldenrod1", "darkslategray4", "olivedrab4")) + +
                     #scale_fill_discrete(labels = c("Pregnancy Stage 1: 0-52 days", "Pregnancy Stage 2: 53-104 days", "Pregnancy Stage 3: 105-157 days", "Nursing Stage 1: 0-121 days", "Nursing Stage 2: 122-242 days", "Nursing Stage 3: 243-365 days"))#filling in the rep stages with cb friendly colors
                     theme_bw() + #removing the gray grid in the background
                     stat_ellipse() +
@@ -506,43 +742,7 @@ grid.newpage()
 grid.draw(g)
 ```
 
-### Significant differences between groups/rep states
 
-Linear models, anovas, & Post-hoc tests
-
-```{r linear model}
-# Chao1
-summary(fm1<-aov(log(chao1)~RepStateStage, data=metadataStageFilt))
-post_oc<-TukeyHSD(fm1, "RepStateStage", ordered=FALSE); post_oc
-
-#Shannon
-summary(fm1<-aov(log(alphadiv)~RepStateStage, data=metadataStageFilt))
-post_oc<-TukeyHSD(fm1, "RepStateStage", ordered=FALSE); post_oc
-```
-
-Non-parametric tests & Post-hoc tests
-
-```{r non-para}
-# Chao1
-kruskal.test(chao1~RepStateStage, data=metadataStageFilt)
-#dunnTest(data=SSRFemalesMetaData,chao1~REP_STATE, method="bh")
-
-# Shannon
-kruskal.test(alphadiv~RepStateStage, data=metadataStageFilt)
-#dunnTest(data=SSRFemalesMetaData,alphadiv~REP_STATE, method="bh")
-```
-
-Linear-mixed models
-
-```{r linear mixed model}
-# Chao1
-fit_chao1 <- lmer(chao1~ RepStateStage + (1 | INDIVIDUAL),data=metadataStageFilt)
-anova(fit_chao1)
-
-# Shannon
-fit_shannon <- lmer(alphadiv~ RepStateStage + (1 | INDIVIDUAL),data=metadataStageFilt)
-anova(fit_shannon,ddf="lme4",test="F")
-```
 
 ### Phyloseq to DESeq2 for differential abundance
 
