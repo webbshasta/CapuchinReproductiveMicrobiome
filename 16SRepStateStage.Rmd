@@ -549,59 +549,10 @@ for (i in 1:10){
   print(kruskal.test(rel_abun_top10_asvs[,i] ~ ReproductiveStatus, data=rel_abun_top10_asvs))
   #print(dunnTest(rel_abun_top10_asvs[,i] ~ REP_STATE, data=rel_abun_top10_asvs, method="bh"))
 }
-limitsX <- c("asv_1Cycling", "asv_1Pregnant", "asv_1Nursing", "", 
-             "asv_2Cycling", "asv_2Pregnant", "asv_2Nursing", "",
-             "asv_3Cycling", "asv_3Pregnant", "asv_3Nursing", "",
-             "asv_4Cycling", "asv_4Pregnant", "asv_4Nursing", "",
-             "asv_5Cycling", "asv_5Pregnant", "asv_5Nursing", "",
-             "asv_6Cycling", "asv_6Pregnant", "asv_6Nursing", "",
-             "asv_7Cycling", "asv_7Pregnant", "asv_7Nursing", "",
-             "asv_8Cycling", "asv_8Pregnant", "asv_8Nursing", "",
-             "asv_9Cycling", "asv_9Pregnant", "asv_9Nursing", "",
-             "asv_10Cycling", "asv_10Pregnant", "asv_10Nursing")
 
 limitsX2 <- c("asv_1", "asv_2", "asv_3", "asv_4", "asv_5", "asv_6", "asv_7", "asv_8", "asv_9", "asv_10")
 breaksX2 <- c("asv_1", "asv_2", "asv_3", "asv_4", "asv_5", "asv_6", "asv_7", "asv_8", "asv_9", "asv_10")
-
-breaksX <- c("asv_1Cycling", "asv_1Pregnant", "asv_1Nursing", "", 
-             "asv_2Cycling", "asv_2Pregnant", "asv_2Nursing", "",
-             "asv_3Cycling", "asv_3Pregnant", "asv_3Nursing", "",
-             "asv_4Cycling", "asv_4Pregnant", "asv_4Nursing", "",
-             "asv_5Cycling", "asv_5Pregnant", "asv_5Nursing", "",
-             "asv_6Cycling", "asv_6Pregnant", "asv_6Nursing", "",
-             "asv_7Cycling", "asv_7Pregnant", "asv_7Nursing", "",
-             "asv_8Cycling", "asv_8Pregnant", "asv_8Nursing", "",
-             "asv_9Cycling", "asv_9Pregnant", "asv_9Nursing", "",
-             "asv_10Cycling", "asv_10Pregnant", "asv_10Nursing")
-
-labelsX <- c("", "Streptococcus", "", "", 
-             "","Bifidobacterium", "", "",
-             "", "Rothia", "", "", 
-             "", "Lachnoclostridium", "", "", 
-             "", "Megamonas", "", "", 
-             "", "Collinsella", "", "", 
-             "", "Escherichia/\nShigella", "", "",
-             "", "Bacteroides", "", "",
-             "", "Enterococcus", "", "", 
-             "", "Anaerobiospirillum", "")
-
 labelsX2 <-  c("Streptococcus", "Bifidobacterium","Rothia","Lachnoclostridium", "Megamonas", "Collinsella", "Escherichia/\nShigella", "Bacteroides", "Enterococcus", "Anaerobiospirillum")
-  
-# Graph for top 10 genera
-p3log10<-ggplot(testLogDf, aes(plot_ID,log10_rel_abund, fill = ReproductiveStatus))+theme_minimal()+
-  geom_boxplot()+
-  scale_x_discrete(limits = limitsX2,
-                   labels = labelsX2,
-                   breaks = breaksX2) +
-  xlab("")+ylab("log10 Relative Abundance")+
-  theme(axis.text.x  = element_text(size=11, color="black", angle=90, vjust = 0.6, hjust = 1, face = "italic"),
-        axis.text.y  = element_text(size=11, color="black"),
-        axis.title.x  = element_text(size=14, color="black"),
-        axis.title.y  = element_text(size=14, color="black"),
-        legend.title = element_blank(),
-        axis.ticks = element_blank()) +
-        scale_fill_manual(labels = c("Cycling", "Pregnant", "Nursing"),
-                            values = c("goldenrod2", "darkslategray4", "olivedrab4"));p3log10
 
 p3<-ggplot(long_rel_abun_top10_asvs, aes(plot_ID,rel_abund*100, fill = ReproductiveStatus))+theme_minimal()+
   geom_boxplot()+
@@ -673,8 +624,224 @@ head(sigtab3)
 ```
 
 
+### Reproductive Stages
 
+```{r}
+metadataStageFilt <- filter(metadataStageFilt, ReproductiveStage %in% c("Cycling_Pre_Conception", "PregnancyStage1", "PregnancyStage2", "PregnancyStage3", "NursingStage1", "NursingStage2", "NursingStage3", "Cycling_PostWeaning")) #subset the 
 
+rownames(metadataStageFilt) <- metadataStageFilt$SAMPLE_ID
+
+psStage <- readRDS("Robjects/psStage.RDS") #reading in the non filtered ps object
+psStage <- prune_samples(sample_data(psStage)$ReproductiveStage %in% c("Cycling_Pre_Conception", "PregnancyStage1", "PregnancyStage2", "PregnancyStage3", "NursingStage1", "NursingStage2", "NursingStage3", "Cycling_PostWeaning"), psStage)
+
+psStage #15012 taxa and 176 samples
+```
+
+### Alpha-diversity (Shannon) vs. species richness (Chao1)
+
+We are doing this step before filtering for low abundance taxa.
+
+*CHAO1
+
+```{r computation}
+adiv<-estimate_richness(psStage,measures=c("Observed","Shannon","Chao1"))
+metadataStageFilt$alphadiv<-adiv$Shannon
+hist(metadataStageFilt$alphadiv)
+metadataStageFilt$chao1<-adiv$Chao1
+hist(metadataStageFilt$chao1)
+metadataStageFilt$evenness<-adiv$Shannon/log(adiv$Observed)
+```
+
+Boxplots with ggplot2
+
+```{r boxplots}
+
+#Before filtering more, we will save this ps object
+saveRDS(psStage, "psStageAllStages.RDS") #This ps object has all cycling states and stages; it has been decontaminated short read samples have been removed. NA rep statuses have been removed it has not undergone any prevalence filtering
+
+metadataStageFilt$ReproductiveStage <- factor(metadataStageFilt$ReproductiveStage, levels = c("Cycling_Pre_Conception", "PregnancyStage1", "PregnancyStage2", "PregnancyStage3", "NursingStage1", "NursingStage2", "NursingStage3", "Cycling_PostWeaning")) #reording factor levels
+
+write.csv(metadataStageFilt, "metadataStageFilt_prePrevFiltering_Stage.csv")
+metadataStageFilt <- read.csv("metadataStageFilt_prePrevFiltering.csv")
+
+repStage_richness <-ggplot(metadataStageFilt, aes(ReproductiveStage, chao1,fill=ReproductiveStatus)) +
+                           theme_bw() +
+                           geom_boxplot(width = 0.5) +
+                           scale_fill_manual(values = c("goldenrod1", "darkslategray4", "olivedrab4")) +
+                           geom_jitter(alpha = 4/10, height = 0) +
+                           xlab("") + ylab("\nSpecies Richness (Chao1)\n") +
+                           guides(fill=F,color=F) +
+                           theme_minimal() +
+                           theme(axis.ticks.x = element_blank(),
+                                 axis.text.x = element_blank()); repStage_richness
+
+repStage_alphaDiv <-ggplot(metadataStageFilt, aes(ReproductiveStage, alphadiv,fill=ReproductiveStatus)) +
+                           theme_bw() +
+                           geom_boxplot(width = 0.5) +
+                           scale_fill_manual(values = c("goldenrod1", "darkslategray4", "olivedrab4")) +
+                           scale_x_discrete(limit = c("Cycling_Pre_Conception", "PregnancyStage1", "PregnancyStage2", "PregnancyStage3", "NursingStage1", "NursingStage2", "NursingStage3", "Cycling_PostWeaning"),
+                                            labels = c("Cycling (Pre-Conception)", "Pregnancy Stage 1", "Pregnancy Stage 2", "Pregnancy Stage 3", "Nursing Stage 1", "Nursing Stage 2", "Nursing Stage 3", "Cycling (Post-Weaning)")) +
+                           geom_jitter(alpha = 4/10, height = 0) +
+                           xlab("") + ylab("\nAlpha Diversity (Shannon)\n") +
+                           guides(fill=F,color=F) +
+                           theme_minimal() +
+                           theme(axis.ticks.x = element_blank(),
+                                 axis.text.x = element_text(angle = 45, hjust = 1)); repStage_alphaDiv
+
+Figure_StageRichnessAlpha <- ggarrange(repStage_richness, repStage_alphaDiv,
+                                          labels = c("A", "B"),
+                                          ncol = 1, nrow = 2, align = "v"); Figure_StageRichnessAlpha
+
+ggsave("Figure_StageRichnessAlpha.pdf", plot = Figure_StageRichnessAlpha, width = 4, height = 6)
+```
+
+### Statistical Tests
+
+```{r linear model}
+# Chao1
+summary(fm1<-aov(log(chao1)~ReproductiveStage, data=metadataStageFilt))
+post_oc<-TukeyHSD(fm1, "ReproductiveStage", ordered=FALSE); post_oc
+tukeyRichnessStage <- as.data.frame(post_oc$ReproductiveStage)
+write.csv(tukeyRichnessStafe, "Results/tukeyRichnessState.csv")
+
+#Shannon
+summary(fm1<-aov(log(alphadiv)~ReproductiveStage, data=metadataStageFilt))
+post_oc<-TukeyHSD(fm1, "ReproductiveStage", ordered=FALSE); post_oc
+tukeyShannonStage <- as.data.frame(post_oc$ReproductiveStage)
+write.csv(tukeyShannonStage, "Results/tukeyShannonStage.csv")
+```
+
+Non-parametric tests & Post-hoc tests
+
+```{r non-para}
+# Chao1
+kruskal.test(chao1~ReproductiveStage, data=metadataStageFilt)
+# Shannon
+kruskal.test(alphadiv~ReproductiveStage, data=metadataStageFilt)
+```
+
+Linear-mixed models
+
+```{r linear mixed model}
+# Chao1
+fit_chao1 <- lmer(chao1~ ReproductiveStage + (1 | INDIVIDUAL), data=metadataStageFilt)
+Anova(fit_chao1)
+
+# Shannon
+fit_shannon <- lmer(alphadiv~ ReproductiveStage + (1 | INDIVIDUAL),data=metadataStageFilt)
+anova(fit_shannon)
+```
+
+### Prevalence filtering
+
+A useful next step is to explore feature prevalence in the dataset, which we will define here as the number of samples in which a taxa appears at least once. (from f1000 paper)
+
+```{r}
+# Compute prevalence of each feature, store as data.frame
+prevdf <- apply(X = otu_table(psStage),
+                 MARGIN = ifelse(taxa_are_rows(psStage), yes = 1, no = 2),
+                 FUN = function(x){sum(x > 0)})
+# Add taxonomy and total read counts to this data.frame
+prevdf <- data.frame(Prevalence = prevdf,
+                      TotalAbundance = taxa_sums(psStage),
+                      tax_table(psStage))
+```
+
+Are there phyla that are comprised of mostly low-prevalence features? Compute the total and average prevalences of the features in each phylum.
+
+```{r}
+plyr::ddply(prevdf, "Phylum", function(df1){cbind(mean(df1$Prevalence),sum(df1$Prevalence))})
+```
+
+```{r}
+# Define phyla to filter
+filterPhyla = c("Deferribacteres", "Dependentiae", "Entotheonellaeota", "Euryarchaeota", "Fibrobacteres", "Hydrogenedentes", "Lentisphaerae", "Omnitrophicaeota", "Synergistetes", "Rokubacteria", "Spirochaetes", "Tenericutes")
+
+# Filter entries with low prevalence of Phylum.
+ps1 <- subset_taxa(psStage, !Phylum %in% filterPhyla)
+ps1 #14894 taxa and 176 samples
+psStage <- ps1
+```
+
+Prevalence Filtering
+
+```{r}
+# Subset to the remaining phyla
+prevdf1 <- subset(prevdf, Phylum %in% get_taxa_unique(psStage, "Phylum"))
+ggplot(prevdf1, aes(TotalAbundance, Prevalence / nsamples(psStage),color=Phylum)) +
+  # Include a guess for parameter
+    geom_hline(yintercept = 0.05, alpha = 0.5, linetype = 2) + 
+    geom_point(size = 2, alpha = 0.7) +
+    scale_x_log10() +
+    xlab("Total Abundance") + 
+    ylab("Prevalence [Frac. Samples]") +
+    facet_wrap(~Phylum) + 
+    theme(legend.position="none")
+```
+
+```{r}
+#  Define prevalence threshold as 5% of total samples
+prevalenceThreshold <- 0.05 * nsamples(psStage)
+prevalenceThreshold
+
+# Execute prevalence filter, using `prune_taxa()` function
+keepTaxa <- rownames(prevdf1)[(prevdf1$Prevalence >= prevalenceThreshold)]
+ps2 <- prune_taxa(keepTaxa, psStage)
+ps2 #327 taxa and 176 samples
+psStage <- ps2
+saveRDS(psStage, "psStage_AllStages_prev05.RDS") #this ps object is all rep states and stages and filtered low prev phyla and filtered to a 5% prevalence threshold
+```
+
+### Agglomerate taxa
+
+When there is known to be a lot of species or sub-species functional redundancy in a microbial community, it might be useful to agglomerate the data features corresponding to closely related taxa. Ideally we would know the functional redundancies perfectly ahead of time, in which case we would agglomerate taxa using those defined relationships and the merge_taxa() function in phyloseq. That kind of exquisite functional data is usually not available, and different pairs of microbes will have different sets of overlapping functions, complicating the matter of defining appropriate grouping criteria.
+
+```{r}
+# How many genera would be present after filtering?
+length(get_taxa_unique(psStage, taxonomic.rank = "Genus"))
+
+## [1] 143 genera
+
+psGlomStage <- tax_glom(psStage, "Genus", NArm = TRUE)
+psGlomStage #142 taxa and 313 samples
+```
+
+### Tailoring to different research questions
+
+Abundance value transformation
+
+It is usually necessary to transform microbiome count data to account for differences in library size, variance, scale, etc. The phyloseq package provides a flexible interface for defining new functions to accomplish these transformations of the abundance values via the transform_sample_counts() function. The first argument to this function is the phyloseq object you want to transform, and the second argument is an R function that defines the transformation. The R function is applied sample-wise, expecting that the first unnamed argument is a vector of taxa counts in the same order as the phyloseq object. Additional arguments are passed on to the function specified in the second argument, providing an explicit means to include pre-computed values, previously defined parameters/thresholds, or any other object that might be appropriate for computing the transformed values of interest.
+
+#### Function for plotting abundance according to reproductive state stage
+
+```{r}
+plot_abundance_Status <- function(physeq,title = "",
+			     Facet = "Phylum", Color = "Phylum"){
+  # Arbitrary subset, based on Phylum, for plotting
+  p1f <- subset_taxa(physeq, Phylum %in% c("Firmicutes"))
+  mphyseq <- psmelt(p1f)
+  mphyseq <- subset(mphyseq, Abundance > 0)
+  ggplot(data = mphyseq, mapping = aes_string(x = "ReproductiveStage",y = "Abundance",
+                                 color = Color, fill = Color)) +
+    geom_violin(fill = NA) +
+    geom_point(size = 1, alpha = 0.3,
+                position = position_jitter(width = 0.3)) +
+    facet_wrap(facets = Facet) + scale_y_log10()+
+    theme(legend.position="none")
+}
+```
+
+#### Plotting abundance according to reproductive state
+
+```{r}
+# Transform to relative abundance. Save as new object.
+psGlomRa <- transform_sample_counts(psGlomStage, function(x){x / sum(x)})
+
+plotBefore <- plot_abundance_Status(psGlomStage,"")
+plotAfter <- plot_abundance_Status(psGlomRa,"")
+# Combine each plot into one graphic.
+grid.arrange(nrow = 2, plotBefore, plotAfter)
+```
 
 ```{r}
 summary(metadataStageFilt)
@@ -696,52 +863,137 @@ betaDivIndStage <- betaDivPCoAStage +
                    facet_wrap(~INDIVIDUAL)
 ```
 
-### Alpha-diversity (Shannon) vs. species richness (Chao1)
+### Beta-diversity (aka community structure/composition)
 
-*CHAO1
+*PERMANOVA with adonis function
+What is the model we want to test?
+Many models can be statistically accurate/robust but few are biologically relevant.
+Make sure to base your model on biologically relevant question.
+Option with repeated measures from many individuals (time-series)
 
-```{r computation}
-adiv<-estimate_richness(psStage,measures=c("Observed","Shannon","Chao1"))
-metadataStageFilt$alphadiv<-adiv$Shannon
-hist(metadataStageFilt$alphadiv)
-metadataStageFilt$chao1<-adiv$Chao1
-hist(metadataStageFilt$chao1)
-metadataStageFilt$evenness<-adiv$Shannon/log(adiv$Observed)
+```{r betadiv}
+# Create function geo means for Variance Stabilizing Transformation
+gm_mean <- function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
 
-write.csv(metadataStageFilt, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/metadataStageFilt4May.csv")
+# Variance Stabilizing Transformation (REP_STATE)
+test.phyloseq.dds<-phyloseq_to_deseq2(psStage,~ReproductiveStage)
+test.phyloseq.dds <- estimateSizeFactors(test.phyloseq.dds, geoMeans = apply(counts(test.phyloseq.dds), 1, gm_mean))
+vst.blind <- DESeq2::varianceStabilizingTransformation(test.phyloseq.dds, blind=TRUE)
+vst.blind.Mat <- SummarizedExperiment::assay(vst.blind) # Extract transformed OTU table
+vst.blind.Mat<-t(vst.blind.Mat)
+vst.blind.Mat[which(vst.blind.Mat<0)]<-0
+dists <- dist(t(assay(vst.blind)))
+
+# Computing Bray-Curtis Dissimilarities and PCoA
+comm.vst.blind.Mat <- vegdist(vst.blind.Mat, "bray")
+PCoA.comm.vst.blind.Mat<-capscale(comm.vst.blind.Mat~1,distance="bray")
+PCoA.comm.vst.blind.Mat$CA$eig[1:3]/sum(PCoA.comm.vst.blind.Mat$CA$eig)
+PCoA.comm.vst.blind.Mat #this will re-order rownames to be alphabetic, which is not the way they are in the metadata csv. you will need to ensure the metadata file and this object have the same rownames before proceedingto plotting or linear models
+eig <- PCoA.comm.vst.blind.Mat$CA$eig
+
+# Portion of total vraiation in community structure explained by each of the main three components
+eig[1]/sum(abs(eig)) #0.2058614 
+eig[2]/sum(abs(eig)) #0.08953513 
+eig[3]/sum(abs(eig)) #0.06394909
+
+# Save scores in dataset tables
+mdTest <- metadataStageFilt %>% #ensure that the df is ordered by SAMPLE_ID
+          arrange(SAMPLE_ID)
+metadataStageFilt <- mdTest
+
+row.names(metadataStageFilt)<-row.names(scores(PCoA.comm.vst.blind.Mat)$sites) 
+metadataStageFilt$PCoA1<-scores(PCoA.comm.vst.blind.Mat)$sites[,1]
+metadataStageFilt$PCoA2<-scores(PCoA.comm.vst.blind.Mat)$sites[,2]
+
+# PERMANOVA
+permanovaMulti<-adonis(comm.vst.blind.Mat ~ ReproductiveStage + dietType + MONTH + INDIVIDUAL + Rainfall, data=metadataStageFilt, permutations = 2000)
+permanova_betaDiv_stage <- as.data.frame(permanovaMulti$aov.tab)
+write.csv(permanova_betaDiv_stage, "Results/permanova_betaDiv_stage.csv")
 ```
 
-Boxplots with ggplot2
+### PCoA with ggplot2
 
-```{r boxplots}
-p<-ggplot(metadataStageFilt, aes(RepStateStage, chao1,fill=RepStateStage)) +
-  theme_bw() +
-  geom_boxplot(alpha=0.6)+
-  scale_fill_manual(values = cbPalette) +
-  xlab("") + ylab("Species Richness\n(Chao1)\n") +
-  guides(fill=F,color=F) +
-  scale_x_discrete(labels = c("","","","","","")) +
-  theme(axis.ticks.x = element_blank());p
+Let's visualize beta-diversity in a figure using PCoA with Bray-Curtis distances. 
 
-p2<-ggplot(metadataStageFilt, aes(RepStateStage, alphadiv,fill=RepStateStage)) +
-  theme_bw() +
-  geom_boxplot(alpha=0.6) +#geom_jitter(width=0.1) +
-  scale_fill_manual(values = cbPalette) +
-  xlab("") + ylab("Alpha Diversity\n(Shannon Index)\n") +
-  scale_x_discrete(labels = c("Pregnancy Stage 1", "Pregnancy Stage 2", "Pregnancy Stage 3", "Nursing Stage 1", "Nursing Stage 2", "Nursing Stage 3")) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        axis.ticks.x = element_blank()) +
-  guides(fill=F,color=F);p2
+```{r}
+summary(metadataStageFilt)
 
-library(gtable); library(grid); library(gridExtra)
-g1 <- ggplotGrob(p)
-g2 <- ggplotGrob(p2)
-g <- rbind(g1, g2, size = "first")
-g$widths <- unit.pmax(g1$widths, g2$widths)
-grid.newpage()
-grid.draw(g)
+metadataStageFilt$ReproductiveStages <- factor(metadataStageFilt$ReproductiveStatus, levels = c("Cycling_Pre_Conception", "PregnancyStage1", "PregnancyStage2", "PregnancyStage3", "NursingStage1", "NursingStage2", "NursingStage3", "Cycling_PostWeaning")) #changing the order of the levels of rep satus from alphabetical to the order we want them in the plots
+
+colorStage <- c("goldenrod4", "slategray2", "darkslategray4", "darkslategray", "darkgreen", "darkolivegreen3", "olivedrab4", "goldenrod1")
+
+betaDivPCoAStage <- ggplot(metadataStageFilt, aes(PCoA1, PCoA2, color = ReproductiveStage)) +
+                    geom_point(size = 3) +
+                    labs(x = "\nPCoA1 [20.6% variance]", y = "PCoA2 [8.95% variance]\n") +
+                    scale_color_manual(values = colorStage, labels = c("Cycling (Pre-conception)", "Pregnancy Stage 1", "Pregnancy Stage 2", "Pregnancy Stage 3", "Nursing Stage 1", "Nursing Stage 2", "Nursing Stage 3", "Cycling (Post-weaning)")) +
+                    theme_minimal() + 
+                    stat_ellipse() +
+                    theme(text = element_text(size = 14),
+                          legend.title = element_blank()); betaDivPCoAStage
+
+ggsave("figure_betaDivPCoAStage.pdf", plot = betaDivPCoAStage, width = 8, height = 6)
 ```
 
+### Top Ten genera across stages
+
+```{r top genera}
+GF_comm<-as.matrix(t(otu_table(psGlomRa, taxa_are_rows=FALSE))) #using agglomerated taxa
+dim(GF_comm) #142 176
+rel_abun_GF<-sweep(GF_comm, 2, apply(GF_comm,2,sum), `/`)
+dim(rel_abun_GF)  #142 176
+apply(rel_abun_GF,2,sum)
+dim(rel_abun_GF)[1]->t
+apply(rel_abun_GF,1,sum)
+order(apply(rel_abun_GF,1,sum))[(t-9):t]
+top10_asvs_GF<-names(apply(rel_abun_GF,1,sum)[order(apply(rel_abun_GF,1,sum))[(t-9):t]])
+taxa[top10_asvs_GF,]->top10_taxa_GF
+row.names(top10_taxa_GF)<-c(length(row.names(top10_taxa_GF)):1)
+paste("asv_",row.names(top10_taxa_GF),sep="")->row.names(top10_taxa_GF)
+top10_taxa_GF
+# Test for changes in relative abundance in dominant taxa
+rel_abun_top10_asvs<-rel_abun_GF[top10_asvs_GF,]
+row.names(rel_abun_top10_asvs)<-row.names(top10_taxa_GF)
+rel_abun_top10_asvs<-t(rel_abun_top10_asvs)
+rel_abun_top10_asvs<-as.data.frame(rel_abun_top10_asvs)
+rel_abun_top10_asvs$SAMPLE_ID<-row.names(rel_abun_top10_asvs)
+metadataStageFilt$ReproductiveStage[as.factor(row.names(rel_abun_top10_asvs))]->rel_abun_top10_asvs$ReproductiveStage
+long_rel_abun_top10_asvs<-tidyr::gather(rel_abun_top10_asvs, key=SAMPLE_ID, value=rel_abund, asv_10:asv_1)
+dim(long_rel_abun_top10_asvs)
+colnames(long_rel_abun_top10_asvs)[2]<-"asv_ID"
+long_rel_abun_top10_asvs$plot_ID<-paste(long_rel_abun_top10_asvs$asv_ID,long_rel_abun_top10_asvs$ReproductiveStage,sep="")
+top10df <- as.data.frame(top10_taxa_GF)
+top10df$asv_ID <- rownames(top10df)
+# Creating log10 column in long_rel_abun_top10_asvs
+testLogDf <- long_rel_abun_top10_asvs %>%
+             mutate(log10_rel_abund = log10(rel_abund))
+for (i in 1:10){
+  print(colnames(rel_abun_top10_asvs[i]))
+  print(kruskal.test(rel_abun_top10_asvs[,i] ~ ReproductiveStage, data=rel_abun_top10_asvs))
+  #print(dunnTest(rel_abun_top10_asvs[,i] ~ REP_STATE, data=rel_abun_top10_asvs, method="bh"))
+}
+
+limitsX2 <- c("asv_1", "asv_2", "asv_3", "asv_4", "asv_5", "asv_6", "asv_7", "asv_8", "asv_9", "asv_10")
+breaksX2 <- c("asv_1", "asv_2", "asv_3", "asv_4", "asv_5", "asv_6", "asv_7", "asv_8", "asv_9", "asv_10")
+labelsX2 <-  c("Streptococcus", "Bifidobacterium","Rothia","Lachnoclostridium", "Megamonas", "Collinsella",  "Bacteroides", "Escherichia/\nShigella", "Enterococcus", "Anaerobiospirillum")
+
+colorStage <- c("goldenrod4", "slategray2", "darkslategray4", "darkslategray", "darkgreen", "darkolivegreen3", "olivedrab4", "goldenrod1")
+
+p3<-ggplot(long_rel_abun_top10_asvs, aes(plot_ID,rel_abund*100, fill = ReproductiveStage))+theme_minimal()+
+  geom_boxplot()+
+  #scale_x_discrete(limits = limitsX2,
+  #                 labels = labelsX2,
+  #                 breaks = breaksX2) +
+  xlab("")+ylab("Relative Abundance (%)\n")+
+  theme(axis.text.x  = element_text(size=11, color="black", angle=90, vjust = 0.6, hjust = 1, face = "italic"),
+        axis.text.y  = element_text(size=11, color="black"),
+        axis.title.x  = element_text(size=14, color="black"),
+        axis.title.y  = element_text(size=14, color="black"),
+        legend.title = element_blank(),
+        axis.ticks = element_blank()) +
+        scale_fill_manual(values = colorStage, labels = c("Cycling (Pre-conception)", "Pregnancy Stage 1", "Pregnancy Stage 2", "Pregnancy Stage 3", "Nursing Stage 1", "Nursing Stage 2", "Nursing Stage 3", "Cycling (Post-weaning)"));p3
+```
 
 
 ### Phyloseq to DESeq2 for differential abundance
@@ -755,42 +1007,39 @@ Since we have a variable of interest with >2 levels, and since we are interested
 "A contrast is a linear combination of estimated log2 fold changes, which can be used to test if differences between groups are equal to zero. The simplest use case for contrasts is an experimental design containing a factor with three levels, say A, B and C. Contrasts enable the user to generate results for all 3 possible differences: log2 fold change of B vs A, of C vs A, and of C vs B. The contrast argument of results function is used to extract test results of log2 fold changes of interest."
 
 ```{r}
-ps.dSeq <- phyloseq_to_deseq2(psStage, ~RepStateStage) #using unagglomerated ps1 object which includes all taxa except for low prevalence phyla (controls are already filtered out)
+psStage <- readRDS("Robjects/psStage_prev05.RDS")
+ps.dSeq <- phyloseq_to_deseq2(psStage, ~ReproductiveStage) #using unagglomerated ps1 object which includes all taxa except for low prevalence phyla (controls are already filtered out)
 ps.dSeq <- estimateSizeFactors(ps.dSeq, geoMeans = apply(counts(ps.dSeq), 1, gm_mean)) #because we have many ASVs that do not appear in all samples, we have to use variance stabilized data to caluculate and visualize differential abundance 
 ps.dSeq <- estimateDispersions(ps.dSeq)
 ps.dSeq.vst <- getVarianceStabilizedData(ps.dSeq)
 dim(ps.dSeq.vst)
 
 psVST <- psStage #psVST is now the phyloseq object with the variance transformed counts
-saveRDS(psVST, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/RObjects/psVSTstage4May.RDS")
+saveRDS(psVST, "Robjects/psVSTstage_18Sept.RDS")
+#psVST <- readRDS("Robjects/psVSTstage_24July.RDS")
 
 otu_table(psVST) <- otu_table(ps.dSeq.vst, taxa_are_rows = TRUE) # psVST variable now has the results of DESeq2 variance-stabilization of counts instead of the original counts.
 
 dds.ps <- DESeq(ps.dSeq, test="Wald", fitType = "parametric") 
 res <- results(dds.ps) #now we can create contrasts and look at other results in the results table 
+
+
 ```
 
-##### Investigating results 
+### Creating results tables for genera
 
-Differential abundance in genera when PregnancyStage2 is compared to PregnancyStage1
+Cycling (Pre-conception) to Pregnancy Stage 1
 
-Load required packages:
-
-```{r}
-library(ggplot2); library(gtable); library(grid); library(gridExtra)
-```
-
-
-```{r Preg1 vs Preg2}
-res1 <- results(dds.ps, contrast = c("RepStateStage", "PregnancyStage2", "PregnancyStage1")) 
+```{r Cycling (Pre-conception) vs Preg1}
+res1 <- results(dds.ps, contrast = c("ReproductiveStage", "PregnancyStage1", "Cycling_Pre_Conception")) 
 res1 <- res1[order(res1$padj, na.last=NA), ]
 alpha <- 0.01
 sigtab1 <- res1[(res1$padj < alpha), ]
 sigtab1 <- cbind(as(sigtab1, "data.frame"), as(tax_table(psVST)[rownames(sigtab1), ], "matrix"))
 head(sigtab1)
 
-write.csv(sigtab1, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPreg2vPreg1_22April2020.csv")
-sigtab1 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPreg2vPreg1_22April2020.csv")
+write.csv(sigtab1, "Results/DiffAbundPreg1vCycPre.csv")
+sigtab1 <- read.csv("Results/DiffAbundPreg1vCycPre.csv")
 
 sigtabgen1 <- subset(sigtab1, !is.na(Genus))
 # Phylum order
@@ -802,32 +1051,35 @@ x <- tapply(sigtabgen1$log2FoldChange, sigtabgen1$Genus, function(x) max(x))
 x <- sort(x, TRUE)
 sigtabgen1$Genus <- factor(as.character(sigtabgen1$Genus), levels=names(x))
 
-cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "grey42")
-cols <- c("Firmicutes" = "#999999", "Actinobacteria" = "#E69F00", "Proteobacteria" = "#56B4E9")
+cols <- c("Firmicutes" = "lightcoral", "Actinobacteria" = "#E69F00", "Proteobacteria" = "#56B4E9", "Bacteroidetes" = "blue")
+
 plot1 <- ggplot(sigtabgen1, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
                 geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
                 geom_point(size=3) + 
-                xlim(-35, 35) +
+                xlim(-50, 50) +
                 scale_color_manual(values = cols) +
-                theme_bw() +
+                theme_minimal() +
                 theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5), 
                       axis.text.y = element_text(face = "italic")) +
-                ggtitle("Pregnancy Stage 1 to Pregnancy Stage 2") +
-                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5)); plot1
+                ggtitle("Cycling (Pre-conception)\nto Pregnancy Stage 1") +
+                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5),
+                      legend.position = "None",
+                      axis.title.y = element_blank(),
+                      axis.title.x = element_blank()); plot1
 ```
 
-Differential abundance in genera when PregnancyStage3 is compared to PregnancyStage2
+Pregnancy Stage 1 to Pregnancy Stage 2
 
-```{r Preg2 vs Preg3}
-res2 <- results(dds.ps, contrast = c("RepStateStage", "PregnancyStage3", "PregnancyStage2"))
+```{r Preg2  vs Preg1}
+res2 <- results(dds.ps, contrast = c("ReproductiveStage", "PregnancyStage2", "PregnancyStage1")) 
 res2 <- res2[order(res2$padj, na.last=NA), ]
 alpha <- 0.01
 sigtab2 <- res2[(res2$padj < alpha), ]
 sigtab2 <- cbind(as(sigtab2, "data.frame"), as(tax_table(psVST)[rownames(sigtab2), ], "matrix"))
 head(sigtab2)
 
-write.csv(sigtab2, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPreg3vPreg2_22April2020.csv")
-sigtab2 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPreg3vPreg2_22April2020.csv")
+write.csv(sigtab2, "Results/DiffAbundPreg2vPreg1.csv")
+sigtab2 <- read.csv("Results/DiffAbundPreg2vPreg1.csv")
 
 sigtabgen2 <- subset(sigtab2, !is.na(Genus))
 # Phylum order
@@ -839,32 +1091,33 @@ x <- tapply(sigtabgen2$log2FoldChange, sigtabgen2$Genus, function(x) max(x))
 x <- sort(x, TRUE)
 sigtabgen2$Genus <- factor(as.character(sigtabgen2$Genus), levels=names(x))
 
-cols <- c("Firmicutes" = "#999999", "Actinobacteria" = "#E69F00", "Proteobacteria" = "#56B4E9", "Bacteroidetes" = "#009E73")
 plot2 <- ggplot(sigtabgen2, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
                 geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
                 geom_point(size=3) + 
-                xlim(-35, 35) +
+                xlim(-50, 50) +
                 scale_color_manual(values = cols) +
-                theme_bw() +
-                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5),
+                theme_minimal() +
+                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5), 
                       axis.text.y = element_text(face = "italic")) +
-                ggtitle("Pregnancy Stage 2 to Pregnancy Stage 3") +
-                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5)); plot2
-
+                ggtitle("Pregnancy Stage 1\nto Pregnancy Stage 2") +
+                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5),
+                      legend.position = "None",
+                      axis.title.y = element_blank(),
+                      axis.title.x = element_blank()); plot2
 ```
 
-Differential abundance in genera when NursingStage1 is compared to PregnancyStage3
+Pregnancy Stage 2 to Pregnancy Stage 3
 
-```{r Preg3 vs Nurse1}
-res3 <- results(dds.ps, contrast = c("RepStateStage", "NursingStage1", "PregnancyStage3")) 
+```{r Preg3 vs Preg2}
+res3 <- results(dds.ps, contrast = c("ReproductiveStage", "PregnancyStage3", "PregnancyStage2")) 
 res3 <- res3[order(res3$padj, na.last=NA), ]
 alpha <- 0.01
 sigtab3 <- res3[(res3$padj < alpha), ]
 sigtab3 <- cbind(as(sigtab3, "data.frame"), as(tax_table(psVST)[rownames(sigtab3), ], "matrix"))
 head(sigtab3)
 
-write.csv(sigtab3, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse1vPreg3_22April2020.csv")
-sigtab3 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse1vPreg3_22April2020.csv")
+write.csv(sigtab3, "Results/DiffAbundPreg3vPreg2.csv")
+sigtab3 <- read.csv("Results/DiffAbundPreg3vPreg2.csv")
 
 sigtabgen3 <- subset(sigtab3, !is.na(Genus))
 # Phylum order
@@ -876,74 +1129,79 @@ x <- tapply(sigtabgen3$log2FoldChange, sigtabgen3$Genus, function(x) max(x))
 x <- sort(x, TRUE)
 sigtabgen3$Genus <- factor(as.character(sigtabgen3$Genus), levels=names(x))
 
-cols <- c("Firmicutes" = "#999999", "Actinobacteria" = "#E69F00", "Proteobacteria" = "#56B4E9", "Bacteroidetes" = "#009E73")
+cols <- c("Firmicutes" = "#999999", "Actinobacteria" = "#E69F00", "Proteobacteria" = "#56B4E9")
+
 plot3 <- ggplot(sigtabgen3, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
                 geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
                 geom_point(size=3) + 
-                xlim(-35, 35) +
+                xlim(-50, 50) +
                 scale_color_manual(values = cols) +
-                theme_bw() +
-                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5),
+                theme_minimal() +
+                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5), 
                       axis.text.y = element_text(face = "italic")) +
-                ggtitle("Pregnancy Stage 3 to Nursing Stage 1") +
-                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5)); plot3
+                ggtitle("Pregnancy Stage 2\nto Pregnancy Stage 3") +
+                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5),
+                      legend.position = "None",
+                      axis.title.y = element_blank(),
+                      axis.title.x = element_blank()); plot3
 ```
 
-Differential abundance in genera when NursingStage2 is compared to NursingStage1
+Pregnancy Stage 3 to Nursing Stage 1
 
-```{r Nurse1 vs Nurse2}
-res4 <- results(dds.ps, contrast = c("RepStateStage", "NursingStage2", "NursingStage1")) #no sig differences
+```{r Nurse1 vs Preg3}
+res4 <- results(dds.ps, contrast = c("ReproductiveStage", "NursingStage1", "PregnancyStage3")) 
 res4 <- res4[order(res4$padj, na.last=NA), ]
 alpha <- 0.01
 sigtab4 <- res4[(res4$padj < alpha), ]
 sigtab4 <- cbind(as(sigtab4, "data.frame"), as(tax_table(psVST)[rownames(sigtab4), ], "matrix"))
 head(sigtab4)
 
-write.csv(sigtab4, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse2vNurse1_22April2020.csv")
-sigtab4 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse2vNurse1_22April2020.csv")
+write.csv(sigtab4, "Results/DiffAbundNurse1vsPreg3.csv")
+sigtab4 <- read.csv("Results/DiffAbundNurse1vsPreg3.csv")
 
 sigtabgen4 <- subset(sigtab4, !is.na(Genus))
 # Phylum order
 x <- tapply(sigtabgen4$log2FoldChange, sigtabgen4$Phylum, function(x) max(x))
 x <- sort(x, TRUE)
-sigtabgen4$Phylum = factor(as.character(sigtabgen4$Phylum), levels=names(x))
+sigtabgen4$Phylum <- factor(as.character(sigtabgen4$Phylum), levels=names(x))
 # Genus order
 x <- tapply(sigtabgen4$log2FoldChange, sigtabgen4$Genus, function(x) max(x))
 x <- sort(x, TRUE)
-sigtabgen4$Genus = factor(as.character(sigtabgen4$Genus), levels=names(x))
-
-cols <- c("Firmicutes" = "#999999", "Actinobacteria" = "#E69F00", "Proteobacteria" = "#56B4E9", "Bacteroidetes" = "#009E73")
+sigtabgen4$Genus <- factor(as.character(sigtabgen4$Genus), levels=names(x))
 
 plot4 <- ggplot(sigtabgen4, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
                 geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
-                geom_point(size=3) +
-                xlim(-35, 35) +
+                geom_point(size=3) + 
+                xlim(-50, 50) +
                 scale_color_manual(values = cols) +
-                theme_bw() +
-                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5),
-                     axis.text.y = element_text(face = "italic")) +
-                ggtitle("Nursing Stage 1 to Nursing Stage 2") +
-                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5)); plot4
+                theme_minimal() +
+                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5), 
+                      axis.text.y = element_text(face = "italic")) +
+                ggtitle("Pregnancy Stage 3\nto Nursing Stage 1") +
+                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5),
+                      legend.position = "None",
+                      axis.title.y = element_blank(),
+                      axis.title.x = element_blank()); plot4
 ```
 
-Differential abundance in genera when NursingStage3 is compared to NursingStage1
+Nursing Stage 1 to Nursing Stage 2
 
-```{r Nurse2 vs Nurse3}
-res5 <- results(dds.ps, contrast = c("RepStateStage", "NursingStage3", "NursingStage2")) 
+```{r Nurse2 vs Nurse1}
+res5 <- results(dds.ps, contrast = c("ReproductiveStage", "NursingStage2", "NursingStage1")) 
 res5 <- res5[order(res5$padj, na.last=NA), ]
 alpha <- 0.01
 sigtab5 <- res5[(res5$padj < alpha), ]
 sigtab5 <- cbind(as(sigtab5, "data.frame"), as(tax_table(psVST)[rownames(sigtab5), ], "matrix"))
 head(sigtab5)
 
-write.csv(sigtab5, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse3vNurse2_22April2020.csv")
-sigtab5 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse3vNurse2_22April2020.csv")
+write.csv(sigtab5, "Results/DiffAbundNurse2vsNurse1.csv")
+sigtab5 <- read.csv("Results/DiffAbundNurse2vsNurse1.csv")
 
 sigtabgen5 <- subset(sigtab5, !is.na(Genus))
 # Phylum order
 x <- tapply(sigtabgen5$log2FoldChange, sigtabgen5$Phylum, function(x) max(x))
 x <- sort(x, TRUE)
-sigtabgen5$Phylum = factor(as.character(sigtabgen5$Phylum), levels=names(x))
+sigtabgen5$Phylum <- factor(as.character(sigtabgen5$Phylum), levels=names(x))
 # Genus order
 x <- tapply(sigtabgen5$log2FoldChange, sigtabgen5$Genus, function(x) max(x))
 x <- sort(x, TRUE)
@@ -951,58 +1209,288 @@ sigtabgen5$Genus <- factor(as.character(sigtabgen5$Genus), levels=names(x))
 
 plot5 <- ggplot(sigtabgen5, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
                 geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
-                geom_point(size=3) +
-                xlim(-35, 35) +
+                geom_point(size=3) + 
+                xlim(-50, 50) +
                 scale_color_manual(values = cols) +
-                theme_bw() +
-                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5),
+                theme_minimal() +
+                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5), 
                       axis.text.y = element_text(face = "italic")) +
-                ggtitle("Nursing Stage 2 to Nursing Stage 3") +
-                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5)); plot5
-
+                ggtitle("Nursing Stage 1\nto Nursing Stage 2") +
+                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5),
+                      legend.position = "None",
+                      axis.title.y = element_blank(),
+                      axis.title.x = element_blank()); plot5
 ```
 
-Creating a combined figure with 5 plots
+Nursing Stage 2 to Nursing Stage 3
+
+```{r Nurse3 vs Nurse2}
+res6 <- results(dds.ps, contrast = c("ReproductiveStage", "NursingStage3", "NursingStage2")) 
+res6 <- res6[order(res6$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab6 <- res6[(res6$padj < alpha), ]
+sigtab6 <- cbind(as(sigtab6, "data.frame"), as(tax_table(psVST)[rownames(sigtab6), ], "matrix"))
+head(sigtab6)
+
+write.csv(sigtab6, "Results/DiffAbundNurse3vsNurse2.csv")
+sigtab6 <- read.csv("Results/DiffAbundNurse3vsNurse2.csv")
+
+sigtabgen6 <- subset(sigtab6, !is.na(Genus))
+# Phylum order
+x <- tapply(sigtabgen6$log2FoldChange, sigtabgen6$Phylum, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen6$Phylum <- factor(as.character(sigtabgen6$Phylum), levels=names(x))
+# Genus order
+x <- tapply(sigtabgen6$log2FoldChange, sigtabgen6$Genus, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen6$Genus <- factor(as.character(sigtabgen6$Genus), levels=names(x))
+
+plot6 <- ggplot(sigtabgen6, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
+                geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
+                geom_point(size=3) + 
+                xlim(-50, 50) +
+                scale_color_manual(values = cols) +
+                theme_minimal() +
+                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5), 
+                      axis.text.y = element_text(face = "italic")) +
+                ggtitle("Nursing Stage 2\nto Nursing Stage 3") +
+                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5),
+                      legend.position = "None",
+                      axis.title.y = element_blank()); plot6
+```
+
+Nursing Stage 3 to Cycling Post-Weaning
+
+```{r Nurse3 vs Nurse2}
+res7 <- results(dds.ps, contrast = c("ReproductiveStage", "Cycling_PostWeaning", "NursingStage3")) 
+res7 <- res7[order(res7$padj, na.last=NA), ]
+alpha <- 0.01
+sigtab7 <- res7[(res7$padj < alpha), ]
+sigtab7 <- cbind(as(sigtab7, "data.frame"), as(tax_table(psVST)[rownames(sigtab7), ], "matrix"))
+head(sigtab7)
+
+write.csv(sigtab7, "Results/DiffAbundCycPostvsNurse3.csv")
+sigtab7 <- read.csv("Results/DiffAbundCycPostvsNurse3.csv")
+
+sigtabgen7 <- subset(sigtab7, !is.na(Genus))
+# Phylum order
+x <- tapply(sigtabgen7$log2FoldChange, sigtabgen7$Phylum, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen7$Phylum <- factor(as.character(sigtabgen7$Phylum), levels=names(x))
+# Genus order
+x <- tapply(sigtabgen7$log2FoldChange, sigtabgen7$Genus, function(x) max(x))
+x <- sort(x, TRUE)
+sigtabgen7$Genus <- factor(as.character(sigtabgen7$Genus), levels=names(x))
+
+plot7 <- ggplot(sigtabgen7, aes(y=Genus, x=log2FoldChange, color=Phylum)) + 
+                geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
+                geom_point(size=3) + 
+                xlim(-50, 50) +
+                scale_color_manual(values = cols) +
+                theme_minimal() +
+                theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5), 
+                      axis.text.y = element_text(face = "italic")) +
+                ggtitle("Nursing Stage 3\nto Cycling (Post-Weaning)") +
+                theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5),
+                      legend.position = "None",
+                      axis.title.y = element_blank()); plot7
+```
+
+Combining the DESeq2 plots
 
 ```{r}
-library(gtable)
-g1 <- ggplotGrob(plot1 + theme(legend.position = "none") + ylab(NULL) + xlab(NULL))
-g2 <- ggplotGrob(plot2 + theme(legend.position = "none") + ylab(NULL) + xlab(NULL))
-g3 <- ggplotGrob(plot3 + theme(legend.position = "none") + ylab(NULL) + xlab(NULL))
-g4 <- ggplotGrob(plot4 + theme(legend.position = "none") + ylab(NULL) + xlab(NULL))
-g5 <- ggplotGrob(plot5 + theme(legend.position = "bottom") + theme(legend.title = element_blank()) + ylab(NULL))
-g <- rbind(g1, g2, g3, g4, g5, size = "first")
-g$widths <- unit.pmax(g1$widths, g2$widths, g3$widths, g4$widths, g5$widths)
-grid.newpage()
-grid.draw(g)
+plot1.legend <- get_legend(plot1) #getting legend from the first plot
+
+logChangeCombinedPlot <- ggarrange(plot1, plot2, plot3, plot4, plot5, plot6, plot7,
+                                   labels = c("A", "B", "C", "D", "E", "F", "G"),
+                                   ncol = 2, nrow = 4, 
+                                   common.legend = TRUE, 
+                                   legend.grob = plot1.legend, 
+                                   legend = "bottom", 
+                                   align = "v"); logChangeCombinedPlot
+
+ggsave("logChangeCombinedPlot.pdf", plot = logChangeCombinedPlot, width = 9, height = 11)
 ```
 
 Creating a results DF 
 
 ```{r}
-p2vp1 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPreg2vPreg1_22April2020.csv")
-p2vp1 <- p2vp1 %>%
-         mutate(Comparison = "PregnancyStage2_versus_PregnancyStage3")
+res1DF <- read.csv("Results/DiffAbundPreg1vCycPre.csv")
+res1DF <- res1DF %>%
+         mutate(Comparison = "CycPreConception_versus_PregnancyStage1")
 
-p3vp2 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundPreg3vPreg2_22April2020.csv")
-p3vp2 <- p3vp2 %>%
+res2DF <- read.csv("Results/DiffAbundPreg2vPreg1.csv")
+res2DF <- res2DF %>%
+         mutate(Comparison = "PregnancyStage2_versus_PregnancyStage1")
+
+res3DF <- read.csv("Results/DiffAbundPreg3vPreg2.csv")
+res3DF <- res3DF %>%
          mutate(Comparison = "PregnancyStage3_versus_PregnancyStage2")
 
-n1vp3 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse1vPreg3_22April2020.csv")
-n1vp3 <- n1vp3 %>%
+res4DF <- read.csv("Results/DiffAbundNurse1vsPreg3.csv")
+res4DF <- res4DF %>%
          mutate(Comparison = "NursingStage1_versus_PregnancyStage3")
 
-n2vn1 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse2vNurse1_22April2020.csv")
-n2vn1 <- n2vn1 %>%
+res5DF <- read.csv("Results/DiffAbundNurse2vsNurse1.csv")
+res5DF <- res5DF %>%
          mutate(Comparison = "NursingStage2_versus_NursingStage1")
 
-n3vn2 <- read.csv("~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/DiffAbundNurse3vNurse2_22April2020.csv")
-n3vn2 <- n3vn2 %>%
-         mutate(Comparison = "NursingStage3_versus_NursingStage1")
+res6DF <- read.csv("Results/DiffAbundNurse3vsNurse2.csv")
+res6DF <- res6DF %>%
+         mutate(Comparison = "NursingStage3_versus_NursingStage2")
 
-diffAbundRes <- rbind(p2vp1,p3vp2,n1vp3,n2vn1,n3vn2)
-write.csv(diffAbundRes, "~/Desktop/PregnancyPaper2019/PregnancyMicrobiomeProject/MicrobiomeAnalysis/ResultTables/diffAbundConcatResults22April.csv")
+res7DF <- read.csv("Results/DiffAbundCycPostvsNurse3.csv")
+res7DF <- res7DF %>%
+         mutate(Comparison = "CycPostWean_versus_NursingStage3")
+
+diffAbundRes <- rbind(res1DF,res2DF,res3DF,res4DF,res5DF,res6DF,res7DF)
+
+diffAbundRes <- diffAbundRes %>%
+                filter(!is.na(Genus))
+
+write.csv(diffAbundRes, "Results/diffAbundConcatResults27July.csv")
+
+diffAbundRes <- read.csv("Results/diffAbundConcatResults27July.csv")
 ```
+
+
+```{r}
+ps.dSeq.phyla <- phyloseq_to_deseq2(phyloGlom, ~ReproductiveStage) #using unagglomerated ps1 object which includes all taxa except for low prevalence phyla (controls are already filtered out)
+ps.dSeq.phyla <- estimateSizeFactors(ps.dSeq.phyla, geoMeans = apply(counts(ps.dSeq.phyla), 1, gm_mean)) #because we have many ASVs that do not appear in all samples, we have to use variance stabilized data to caluculate and visualize differential abundance 
+ps.dSeq.phyla <- estimateDispersions(ps.dSeq.phyla)
+ps.dSeq.phyla.vst <- getVarianceStabilizedData(ps.dSeq.phyla)
+dim(ps.dSeq.phyla.vst)
+
+psVSTphyla <- phyloGlom #psVST is now the phyloseq object with the variance transformed counts
+saveRDS(psVSTphyla, "Robjects/psVSTstagePhyla_24July.RDS")
+
+otu_table(psVSTphyla) <- otu_table(ps.dSeq.phyla.vst, taxa_are_rows = TRUE) # psVST variable now has the results of DESeq2 variance-stabilization of counts instead of the original counts.
+
+dds.ps.phyla <- DESeq(ps.dSeq.phyla, test="Wald", fitType = "parametric") 
+resPhyla <- results(dds.ps.phyla) #now we can create contrasts and look at other results in the results table 
+```
+
+
+
+
+
+### Phyla ratios visualization
+
+Creating a phylum object 
+
+```{r}
+phyloGlom = tax_glom(psStage, "Phylum", NArm = TRUE) #13 taxa and 176 samples
+phyloGlomRA <- transform_sample_counts(phyloGlom, function(x){x / sum(x)})
+
+plotBefore <- plot_abundance_Status(phyloGlomRA,"")
+plotAfter <- plot_abundance_Status(phyloGlomRA,"")
+# Combine each plot into one graphic.
+grid.arrange(nrow = 2, plotBefore, plotAfter)
+```
+
+Top phyla
+
+```{r top genera}
+Phyla_comm<-as.matrix(t(otu_table(phyloGlomRA, taxa_are_rows=FALSE))) #using agglomerated taxa
+dim(Phyla_comm) #142 176
+rel_abun_phyla<-sweep(Phyla_comm, 2, apply(Phyla_comm,2,sum), `/`)
+dim(rel_abun_phyla)  #142 176
+apply(rel_abun_phyla,2,sum)
+dim(rel_abun_phyla)[1]->t
+apply(rel_abun_phyla,1,sum)
+order(apply(rel_abun_phyla,1,sum))[(t-9):t]
+top10_phyla<-names(apply(rel_abun_phyla,1,sum)[order(apply(rel_abun_phyla,1,sum))[(t-9):t]])
+taxa[top10_phyla,]->top10_taxa_phyla
+row.names(top10_taxa_phyla)<-c(length(row.names(top10_taxa_phyla)):1)
+paste("phylum_",row.names(top10_taxa_phyla),sep="")->row.names(top10_taxa_phyla)
+top10_taxa_phyla
+# Test for changes in relative abundance in dominant taxa
+rel_abun_top10_phyla<-rel_abun_phyla[top10_phyla,]
+row.names(rel_abun_top10_phyla)<-row.names(top10_taxa_phyla)
+rel_abun_top10_phyla<-t(rel_abun_top10_phyla)
+rel_abun_top10_phyla<-as.data.frame(rel_abun_top10_phyla)
+rel_abun_top10_phyla$SAMPLE_ID<-row.names(rel_abun_top10_phyla)
+metadataStageFilt$ReproductiveStage[as.factor(row.names(rel_abun_top10_phyla))]->rel_abun_top10_phyla$ReproductiveStage
+long_rel_abun_top10_phyla<-tidyr::gather(rel_abun_top10_phyla, key=SAMPLE_ID, value=rel_abund, phylum_10:phylum_1)
+dim(long_rel_abun_top10_phyla)
+colnames(long_rel_abun_top10_phyla)[2]<-"phylum_ID"
+long_rel_abun_top10_phyla$plot_ID<-paste(long_rel_abun_top10_phyla$asv_ID,long_rel_abun_top10_phyla$ReproductiveStage,sep="")
+top10df_phyla <- as.data.frame(top10_taxa_phyla)
+top10df_phyla$asv_ID <- rownames(top10df_phyla)
+
+for (i in 1:10){
+  print(colnames(rel_abun_top10_phyla[i]))
+  print(kruskal.test(rel_abun_top10_phyla[,i] ~ ReproductiveStage, data=rel_abun_top10_phyla))
+  #print(dunnTest(rel_abun_top10_asvs[,i] ~ REP_STATE, data=rel_abun_top10_asvs, method="bh"))
+}
+
+limitsX2 <- c("phylum_1", "phylum_2", "phylum_3", "phylum_4", "phylum_5", "phylum_6", "phylum_7", "phylum_8", "phylum_9", "phylum_10")
+breaksX2 <- c("phylum_1", "phylum_2", "phylum_3", "phylum_4", "phylum_5", "phylum_6", "phylum_7", "phylum_8", "phylum_9", "phylum_10")
+labelsX2 <-  c("Firmicutes", "Actinobacteria","Proteobacteria","Bacteroidetes", "Epsilonbacteraeota", "Fusobacteria",  "Thaumarchaeota", "Acidobacteria", "Verrucomicrobia", "Chloroflexi")
+
+colorStage <- c("goldenrod4", "slategray2", "darkslategray4", "darkslategray", "darkgreen", "darkolivegreen3", "olivedrab4", "goldenrod1")
+
+phylaPlot<-ggplot(long_rel_abun_top10_phyla, aes(phylum_ID,rel_abund*100, fill = ReproductiveStage))+theme_minimal()+
+  geom_boxplot()+
+  scale_x_discrete(limits = limitsX2,
+                   labels = labelsX2,
+                   breaks = breaksX2) +
+  xlab("")+ylab("Relative Abundance (%)\n")+
+  theme(axis.text.x  = element_text(size=11, color="black", angle=90, vjust = 0.6, hjust = 1, face = "italic"),
+        axis.text.y  = element_text(size=11, color="black"),
+        axis.title.x  = element_text(size=14, color="black"),
+        axis.title.y  = element_text(size=14, color="black"),
+        legend.title = element_blank(),
+        axis.ticks = element_blank()) +
+        scale_fill_manual(values = colorStage, labels = c("Cycling (Pre-conception)", "Pregnancy Stage 1", "Pregnancy Stage 2", "Pregnancy Stage 3", "Nursing Stage 1", "Nursing Stage 2", "Nursing Stage 3", "Cycling (Post-weaning)"));phylaPlot
+
+long_rel_abun_top10_phyla_BACT_FIRM <- long_rel_abun_top10_phyla %>%
+                                       filter(phylum_ID %in% c("phylum_1", "phylum_4"))
+
+limitsX3 <- c("phylum_1", "phylum_4")
+breaksX3 <- c("phylum_1", "phylum_4")
+labelsX3 <-  c("Firmicutes", "Bacteroidetes")
+
+phylaPlotBactFirm<-ggplot(long_rel_abun_top10_phyla_BACT_FIRM, aes(ReproductiveStage,rel_abund*100, fill = phylum_ID))+theme_minimal()+
+  geom_boxplot()+
+  scale_x_discrete(labels = c("Cycling (Pre-conception)", "Pregnancy Stage 1", "Pregnancy Stage 2", "Pregnancy Stage 3", "Nursing Stage 1", "Nursing Stage 2", "Nursing Stage 3", "Cycling (Post-weaning)")) +
+  scale_fill_manual(labels = c("Firmicutes", "Bacteroidetes"),
+                    values = c("lightcoral", "blue")) +
+  xlab("")+ylab("Relative Abundance (%)\n")+
+  theme(axis.text.x  = element_text(size=11, color="black", angle=45, vjust = 1, hjust = 1),
+        axis.text.y  = element_text(size=11, color="black"),
+        axis.title.x  = element_text(size=14, color="black"),
+        axis.title.y  = element_text(size=14, color="black"),
+        legend.title = element_blank(),
+        axis.ticks = element_blank()) ; phylaPlotBactFirm
+
+ggsave(plot = phylaPlotBactFirm, "phylaPlotBactFirm.pdf", height = 8, width = 6)
+        
+```
+
+Bacteroidetes/Firmicutes Ratio
+
+```{r}
+rel_abun_top10_phyla
+relAbunBactFirm <- rel_abun_top10_phyla %>%
+                   dplyr::select(SAMPLE_ID, ReproductiveStage, phylum_1, phylum_4)
+
+relAbunBactFirm <- dplyr::rename(relAbunBactFirm, Firmicutes = phylum_1)
+relAbunBactFirm <- dplyr::rename(relAbunBactFirm, Bacteroidetes = phylum_4)
+
+relAbunBactFirm <- relAbunBactFirm %>%
+                   mutate(Ratio = Firmicutes/Bacteroidetes)
+
+firmBactPlot <- ggplot(relAbunBactFirm, aes(x = Firmicutes*100, y = Bacteroidetes*100, color = ReproductiveStage)) +
+                       geom_point() +
+                       facet_wrap(~ReproductiveStage); firmBactPlot
+
+ratioFirmBactPlot <- ggplot(relAbunBactFirm, aes(x = ReproductiveStage, y = Ratio, fill = ReproductiveStage)) +
+                            geom_boxplot() 
+                            #scale_fill_discrete(values = colorStage); ratioFirmBactPlot
+
+```
+
 
 ### Creating a figure tracking abundance over the course of pregnancy and nursing
 
